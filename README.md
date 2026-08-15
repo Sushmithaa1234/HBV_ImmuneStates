@@ -1,2 +1,2 @@
-# Comparative single-cell profiling of intrahepatic immune states across clinical states of chronic hepatitis B
+# Comparative Single-cell Profiling of Intrahepatic Immune States across Clinical States of Chronic Hepatitis B
 
