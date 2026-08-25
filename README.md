@@ -1,149 +1,291 @@
 # Comparative Single-cell Profiling of Intrahepatic Immune States across Clinical States of Chronic Hepatitis B
 
-Overview
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Status](https://img.shields.io/badge/Status-In%20Progress-blue)
+![R](https://img.shields.io/badge/R-%3E%3D4.5.0-blue)
 
-A reproducible single-cell RNA-seq analysis characterizing CD8 T-cell and macrophage transcriptional states across 23 individuals representing five distinct clinical states of chronic hepatitis B infection.
+## 📋 Overview
 
-Clinical Context
+A **fully reproducible single-cell RNA-seq analysis** characterizing **CD8 T-cell** and **macrophage transcriptional states** across 23 individuals representing five distinct clinical states of chronic hepatitis B infection. This project integrates differential expression, pathway enrichment, co-expression network analysis, and predicted cell-cell communication across clinically-defined HBV disease stages.
 
-This study investigates intrahepatic immune populations across HBV disease stages:
+---
 
-NL — Healthy/Seronegative (n=6)
-IT — Immunotolerant (n=6)
-IA — Immune Active (n=5)
-AR — Anti-HBe Seroconversion (n=3)
-AC — Anti-HBc Seroconversion (n=3)
-Dataset
+## 🔬 Clinical Context
 
-Source: Gene Expression Omnibus (GEO)
-Accession: GSE182159
-Platform: 10x Genomics Chromium
-Samples: 23 liver biopsies (one per donor)
-Post-QC Cells: 106,592 cells
-Genes: 18,925
+This study investigates intrahepatic immune cell populations across the HBV disease spectrum:
 
-Raw data are downloaded automatically from GEO via TCGAbiolinks. No raw matrices are included in this repository.
+| Clinical State | Abbr. | N | Description |
+|---|---|---|---|
+| Healthy/Seronegative | **NL** | 6 | Anti-HBc antibody negative |
+| Immunotolerant | **IT** | 6 | High viral load, minimal inflammation |
+| Immune Active | **IA** | 5 | Active viral replication, inflammation |
+| Anti-HBe Seroconversion | **AR** | 3 | Transitional immune phase |
+| Anti-HBc Seroconversion | **AC** | 3 | Resolved/chronic inactive state |
 
-Analysis Workflow
-Phase	Goal	Status
-0	Pre-analysis audit	✅ Complete
-1	Project infrastructure	✅ Complete
-2	Data loading + QC	✅ Complete
-3	Global atlas + cell-type annotation	🟢 In Progress
-4	CD8 T-cell characterization	⏳ Planned
-5	Macrophage/myeloid characterization	⏳ Planned
-6	Differential expression analysis	⏳ Planned
-7	Pathway enrichment	⏳ Planned
-8	Cell-cell communication (CellChat)	⏳ Planned
-9	Figure generation + integration	⏳ Planned
+---
 
-Note: Workflow and specific analyses may evolve as data are processed. Updates will be reflected in this README and individual scripts.
+## 📊 Dataset
 
-Repository Structure
+| Property | Value |
+|---|---|
+| **Source** | Gene Expression Omnibus (GEO) |
+| **Accession** | [GSE182159](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE182159) |
+| **Technology** | 10x Genomics Chromium (v2/v3) |
+| **Samples** | 23 liver biopsies (1 per donor) |
+| **Post-QC Cells** | **106,592 cells** |
+| **Genes Detected** | **18,925 genes** |
+
+**Data Access:** Raw expression matrices are downloaded automatically via `TCGAbiolinks` during pipeline execution. No raw data are stored in this repository.
+
+---
+
+## 📈 Analysis Workflow
+
+| Phase | Objective | Status |
+|---|---|---|
+| **0** | Pre-analysis dataset audit | ✅ **Complete** |
+| **1** | Project infrastructure setup | ✅ **Complete** |
+| **2** | Data loading + cell-level QC | ✅ **Complete** |
+| **3** | Global atlas + cell-type annotation | 🟢 **In Progress** |
+| **4** | CD8 T-cell subset analysis | ⏳ Planned |
+| **5** | Macrophage/myeloid subset analysis | ⏳ Planned |
+| **6** | Differential expression analysis | ⏳ Planned |
+| **7** | Pathway enrichment (GO/KEGG/GSEA) | ⏳ Planned |
+| **8** | Cell-cell communication (CellChat) | ⏳ Planned |
+| **9** | Figure generation + integration | ⏳ Planned |
+
+**Important:** Workflow and analysis decisions may evolve as data are processed. All updates will be reflected in this README and corresponding scripts.
+
+---
+
+## 📁 Repository Structure
+
+```
 HBV_ImmuneStates/
-├── README.md
-├── .gitignore
+│
+├── README.md                          # This file
+├── .gitignore                         # Git exclusions
 │
 ├── scripts/
-│   ├── 00_setup.R                     # Environment + packages
-│   ├── 01_load_and_merge.R            # Load 23 samples, merge
-│   ├── 02_qc_filtering.R              # Cell QC
+│   ├── 00_setup.R                     # R environment + package setup
+│   ├── 01_load_and_merge.R            # Load + merge 23 samples
+│   ├── 02_qc_filtering.R              # Cell-level QC + metrics
 │   ├── 03_metadata_annotation.R       # Global atlas + annotation
-│   ├── 04_subset_cd8.R                # CD8 subset
-│   ├── 05_subset_myeloid.R            # Myeloid subset
+│   ├── 04_subset_cd8.R                # CD8 T-cell subset
+│   ├── 05_subset_myeloid.R            # Macrophage/myeloid subset
 │   ├── 06_de_analysis.R               # Differential expression
-│   ├── 07_pathway_enrichment.R        # GO, KEGG, GSEA
+│   ├── 07_pathway_enrichment.R        # Functional enrichment
 │   ├── 08_cellchat_analysis.R         # Cell-cell communication
-│   └── run_full_pipeline.R            # Master script
+│   └── run_full_pipeline.R            # Master control script
 │
 ├── data/
-│   ├── raw/                           # [Downloaded at runtime]
-│   └── processed/                     # Checkpoints, intermediate objects
+│   ├── raw/                           # [Auto-downloaded at runtime]
+│   └── processed/                     # Intermediate objects, checkpoints
 │
 └── results/
-    ├── rds_objects/                   # Seurat checkpoints
-    ├── tables/                        # CSV/TSV tables
+    ├── rds_objects/                   # Seurat checkpoints (.rds)
+    ├── tables/                        # CSV/TSV result tables
     └── figures/                       # PNG/PDF figures
-Software Requirements
+```
 
-R: ≥ 4.2.0
+---
 
-Key Packages:
+## 🛠️ Software Requirements
 
-r
-# Bioconductor
-BiocManager::install("TCGAbiolinks")
-BiocManager::install("DESeq2")
-BiocManager::install("clusterProfiler")
-BiocManager::install("org.Hs.eg.db")
-BiocManager::install("WGCNA")
-BiocManager::install("SingleR")
+### **R Version**
+```
+R >= 4.5.0
+```
 
-# CRAN
-install.packages("Seurat")
-install.packages("ggplot2")
-install.packages("dplyr")
-install.packages("pheatmap")
-install.packages("survival")
+### **Core Packages**
 
-See sessionInfo.txt for exact versions after reproducibility run.
+#### Bioconductor
+```r
+BiocManager::install(c(
+  "TCGAbiolinks",        # GEO data retrieval
+  "DESeq2",              # Differential expression
+  "clusterProfiler",     # Gene enrichment
+  "org.Hs.eg.db",        # Gene annotations
+  "WGCNA",               # Co-expression networks
+  "SingleR",             # Reference-based annotation
+  "scDblFinder"          # Doublet detection
+))
+```
 
-Quick Start
-1. Clone repository
-bash
+#### CRAN
+```r
+install.packages(c(
+  "Seurat",              # scRNA-seq toolkit
+  "ggplot2",             # Visualization
+  "dplyr",               # Data manipulation
+  "pheatmap",            # Heatmaps
+  "survival",            # Survival analysis
+  "scales",              # Plotting utilities
+  "tidyr"                # Data tidying
+))
+```
+
+**See `sessionInfo.txt` for exact package versions** (generated after reproducibility run).
+
+---
+
+## 🚀 Quick Start
+
+### **Step 1: Clone Repository**
+```bash
 git clone https://github.com/Sushmithaa1234/HBV-ImmuneStates-scRNA.git
 cd HBV-ImmuneStates
-2. Set up environment
-r
-source("scripts/00_setup.R")
-3. Run pipeline
-r
-# Full pipeline
-source("scripts/run_full_pipeline.R")
+```
 
-# Or run individual phases
+### **Step 2: Set Up R Environment**
+```r
+# Open R in repository root
+source("scripts/00_setup.R")
+```
+
+This will:
+- ✅ Verify R version
+- ✅ Install/load required packages
+- ✅ Record package versions
+- ✅ Confirm reproducibility environment
+
+### **Step 3: Run Full Pipeline**
+
+**Option A — Run all phases sequentially:**
+```r
+source("scripts/run_full_pipeline.R")
+```
+
+**Option B — Run individual phases:**
+```r
 source("scripts/01_load_and_merge.R")
 source("scripts/02_qc_filtering.R")
+source("scripts/03_metadata_annotation.R")
 # ... etc
+```
 
-Runtime: ~4–6 hours (32GB RAM recommended)
+### **Step 4: Check Results**
+All outputs are written to `results/` with subdirectories for figures, tables, and RDS objects.
 
-Results
+---
 
-Results from completed phases will be added here as analysis progresses.
+## ⏱️ Runtime
 
-Phase 3 (Current)
-Global UMAP of all 106,592 cells
-17 major cell clusters
-Cell-type annotations with confidence scores
-[Full results pending completion]
-Phase 4–9
+**Expected:** ~4–6 hours (on 32GB RAM system)  
+**Bottleneck:** Phase 3 annotation + projection (most compute-intensive)
 
-Results tables, figures, and interpretations will be added as each phase completes.
+---
 
-Key Analysis Decisions
-Leverage-score sketch: 21,756 representative cells used to establish global structure; full dataset projected into learned space for scalability and traceability.
-Multi-evidence annotation: Cell types assigned using cluster markers + canonical lineage genes + reference validation (SingleR) + module scoring, not automated classifiers alone.
-No blindside removals: Flagged samples/cells from Phase 0 carried forward; final filtering decisions made explicitly with justification.
-Reproducibility first: All thresholds documented; sensitivity analyses included.
-Important Notes
+## 📊 Results
 
-This is observational scRNA-seq analysis:
+### **Phase 3 (Current — In Progress)**
 
-Findings describe transcriptional associations, not causal mechanisms.
-CellChat predicts communication; experimental validation required.
-Results should use language like "associated with," "suggests," "characterized by" rather than "proves" or "causes."
-Citation
-Sushmithaa Chandrasekar.
-Single-cell immunotranscriptomic profiling of intrahepatic immune states in chronic hepatitis B.
-[Preprint in preparation]
+Upon completion of Phase 3, the following deliverables will be available:
+
+- ✅ **Global UMAP:** All 106,592 cells in low-dimensional space
+- ✅ **17 Major Cell Clusters:** Identified via graph-based clustering on leverage-score sketch
+- ✅ **Cell-Type Annotations:** Multi-evidence framework (cluster markers + canonical genes + SingleR)
+- ✅ **Transfer Confidence Scores:** Projection validation (99.79% sketch cluster retention)
+- ✅ **Sample/Donor Metadata:** Linked to all cells
+- ✅ **Canonical Marker Validation:** T cells, CD8 T cells, macrophages, dendritic cells, B cells, NK cells, etc.
+
+### **Phases 4–9**
+
+Results tables, figures, and biological interpretations will be added incrementally as each phase completes. See `results/` directory for current outputs.
+
+---
+
+## 🔑 Key Methodological Decisions
+
+### **Leverage-Score Sketch for Scalability**
+- Reference sketch: **21,756 representative cells** (up to 1,000 cells per sample)
+- Smallest sample (66 cells) fully retained
+- Full dataset projected into learned sketch-derived PCA/UMAP space
+- **Benefit:** Maintains traceability while preserving computational tractability
+
+### **Multi-Evidence Cell-Type Annotation**
+Cell type assignments integrate:
+1. **Cluster-specific markers** (FindAllMarkers)
+2. **Canonical lineage gene panels** (T cells, macrophages, etc.)
+3. **Module scoring** (curated marker programs)
+4. **SingleR validation** (reference-based annotation)
+5. **Manual biological interpretation**
+
+This avoids reliance on automated classifiers alone.
+
+### **Transparent QC Decisions**
+- Phase 0 flags samples; **no automatic removal**
+- Flagged samples/cells carried forward into Phase 2
+- Final filtering decisions made **explicitly with justification**
+- Sensitivity analyses included
+
+### **Reproducibility-First**
+- All thresholds documented and justified
+- No post-hoc result removal for convenience
+- Session information recorded for full transparency
+
+---
+
+## ⚠️ Important Interpretive Notes
+
+### **This is Observational Single-Cell Analysis**
+
+1. **CellChat Predictions:** Identify predicted ligand-receptor interactions, not experimentally proven functional signaling
+2. **Differential Expression:** Identifies transcriptional associations, not causal mechanisms
+3. **Network Topology:** Hub genes are highly connected within co-expression networks; centrality ≠ biological importance
+
+### **Recommended Language**
+Use: *associated with*, *suggests*, *characterized by*, *predicted*  
+Avoid: *proves*, *causes*, *demonstrates mechanism*
+
+---
+
+## 📚 Citation
+
+If you use this analysis or repository, please cite:
+
+```bibtex
+@article{Chandrasekar2026,
+  author = {Sushmithaa Chandrasekar},
+  title = {Single-cell immunotranscriptomic profiling of intrahepatic immune states in chronic hepatitis B},
+  year = {2026},
+  url = {https://github.com/Sushmithaa1234/HBV-ImmuneStates-scRNA}
+}
+```
+
+Or as text:
+
+```
+Sushmithaa Chandrasekar (2026). Single-cell immunotranscriptomic profiling 
+of intrahepatic immune states in chronic hepatitis B. 
 GitHub: https://github.com/Sushmithaa1234/HBV-ImmuneStates-scRNA
-License
+```
 
-MIT License — See LICENSE for details.
+---
 
-Contact
+## 📄 License
 
-GitHub: @Sushmithaa1234
+This project is released under the **MIT License**. See [LICENSE](LICENSE) for details.
 
-For questions or issues, please open a GitHub issue.
+---
+
+## 💬 Contact & Support
+
+**Author:** Sushmithaa Chandrasekar  
+**GitHub:** [@Sushmithaa1234](https://github.com/Sushmithaa1234)  
+**GitHub Issues:** [Report bugs or request features](https://github.com/Sushmithaa1234/HBV-ImmuneStates-scRNA/issues)
+
+For methodology questions or analysis collaboration inquiries, please open an issue or contact directly.
+
+---
+
+## 🙏 Acknowledgments
+
+- GEO repository and GSE182159 contributors for public data access
+- Seurat, CellChat, and R/Bioconductor communities for open-source tools
+- Inspiration from single-cell immunology literature
+
+---
+
+**Last Updated:** August 2026  
+**Status:** Analysis in progress (Phase 3)
