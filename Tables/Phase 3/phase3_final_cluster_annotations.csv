@@ -1,0 +1,19 @@
+Cluster,Module_Label,Module_Top_Score,Module_Second_Score,Module_Score_Gap,Marker_Overlap_Label,Marker_Overlap_Count,SingleR_Label,SingleR_Delta,Final_CellType,Confidence,Rationale
+0,CD8_T,0.8811075944567536,0.246952661453912,0.6341549330028415,CD8_T,2,T_cells,0.28059189897975256,CD8_T,High,CD8_T supported by module scoring and marker overlap.
+1,CD8_T,1.2305835781681045,0.4416548294756461,0.7889287486924582,CD8_T,3,T_cells,0.31152846971951564,CD8_T,High,CD8_T supported by module scoring and marker overlap.
+2,MAIT,0.7822745439050665,0.6718608383186763,0.1104137055863902,MAIT,5,T_cells,0.30881362353697217,MAIT,Moderate,MAIT module and marker-overlap evidence support a MAIT-like T-cell identity.
+3,CD4_T,0.7459267643150383,0.05224855544738933,0.693678208867649,CD4_T,3,T_cells,0.8892527981598743,CD4_T,High,CD4_T supported by module scoring and marker overlap.
+4,NK,1.574245236927122,0.3999792954020181,1.174265941525104,NK,5,NK_cell,0.08446937221453577,NK,High,NK identity strongly supported by module scoring and marker overlap.
+5,NK,0.4813824180755869,0.3772115996244538,0.10417081845113312,Myeloid,2,NK_cell,0.10407571748873246,NK_like,Moderate,NK module signal is present but marker overlap favors myeloid lineage; retained as NK-like pending downstream refinement.
+6,CD4_T,0.961493909490268,0.45785893656245075,0.5036349729278173,CD4_T,4,T_cells,0.7464552838217859,CD4_T,High,CD4_T supported by module scoring and marker overlap.
+7,B_Cell,2.099844097983461,0.4947646032008426,1.6050794947826184,B_Cell,2,B_cell,0.11422135387222054,B_Cell,High,B-cell identity strongly supported by module scoring and marker overlap.
+8,CD8_T,0.6570532198052622,0.5064246589827023,0.15062856082255993,CD4_T,1,T_cells,0.3141407722207772,T_Cell,Low,Conflicting CD8_T and CD4_T program evidence; assigned broadly as T_Cell.
+9,Myeloid,2.36313343621152,2.3554209981938636,0.00771243801765653,Monocyte,4,Monocyte,0.07392696681532973,Monocyte,Moderate,Strong myeloid program with monocyte marker overlap; assigned Monocyte.
+10,B_Cell,2.4645568625280836,0.6533121449869347,1.811244717541149,B_Cell,2,B_cell,0.16010070387178588,B_Cell,High,B-cell identity strongly supported by module scoring and marker overlap.
+11,Plasma_Cell,2.280273152744606,0.4274786130025047,1.8527945397421013,Plasma_Cell,4,B_cell,0.0718163148748393,Plasma_Cell,High,Plasma-cell identity strongly supported by the plasma-cell module and marker evidence.
+12,Myeloid,1.507716554684636,1.0423258077300157,0.4653907469546203,Macrophage,4,Monocyte,0.15584987787729565,Macrophage,High,Myeloid and macrophage programs are both enriched; macrophage marker overlap supports Macrophage.
+13,Myeloid,1.9073519137378545,1.8015142112264015,0.10583770251145276,Unresolved,0,Monocyte,0.06605683174812726,Myeloid,Moderate,Strong myeloid signal without sufficiently specific marker-overlap evidence for a narrower subtype.
+14,NK,1.6477845447128043,0.48849647380331657,1.1592880709094875,NK,5,NK_cell,0.0638610188221359,NK,High,NK identity strongly supported by module scoring and marker overlap.
+15,Myeloid,0.6853822266781349,0.6307904394454287,0.05459178723270619,Myeloid,2,NK_cell,0.07532266580322833,Myeloid,Low,Weak and mixed NK/myeloid signals; assigned broadly as Myeloid with low confidence.
+16,pDC,1.7311482138415692,0.7806021590298909,0.9505460548116784,pDC,3,B_cell,0.00199647865329202,pDC,High,pDC program strongly enriched and supported by canonical pDC markers.
+17,NK,0.9172550289754684,0.3952857147083222,0.5219693142671462,GammaDelta_T,2,NK_cell,0.10550650867730504,GammaDelta_T,Moderate,"NK-like program is present, but gamma-delta T-cell marker overlap supports GammaDelta_T."
