@@ -26,11 +26,6 @@
 #   - Manual annotation is based on cluster markers, canonical marker programs,
 #     and donor/sample representation.
 #   - KNN transfer agreement is not a calibrated biological probability.
-#
-# WORKFLOW:
-#   PART A: Run Sections 0-21B.
-#           Review outputs and complete phase3_cluster_annotation.csv.
-#   PART B: Resume at Section 22.
 # ============================================================================
 
 # ============================================================================
