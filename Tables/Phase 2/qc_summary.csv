@@ -1,0 +1,17 @@
+metric,value
+Cells before QC,106592
+Cells after fixed QC,106592
+Cells lost by fixed QC,0
+Percent retained after fixed QC,100
+Predicted doublets removed,1445
+Predicted singlets retained,105147
+Percent retained after doublet removal,98.64
+Final atlas input cells,105147
+Total cells removed,1445
+Percent retained overall,98.64
+Minimum genes,200
+Maximum genes,6000
+Maximum mitochondrial percentage,20
+Samples,23
+Donors,23
+Clinical states,5

@@ -1,0 +1,18 @@
+Metric,Value
+Input cells,106592
+Post-fixed-QC cells,106592
+Cells removed by fixed QC,0
+Percent retained after fixed QC,100
+Predicted doublets removed,1445
+Predicted singlets retained,105147
+Percent retained after doublet removal,98.64
+Final atlas input cells,105147
+Total cells removed,1445
+Percent retained overall,98.64
+Samples,23
+Donors,23
+Clinical states,5
+Smallest sample before QC (cells),66
+Low-gene cells removed,0
+High-gene cells removed,0
+High-MT cells removed,0
