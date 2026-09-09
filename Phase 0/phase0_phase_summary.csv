@@ -1,0 +1,6 @@
+phase,patients,total_cells,median_cells_per_sample,median_genes_per_cell
+AR,3,19527,6070,1426
+CR,3,13666,4122,1339
+HC,6,22283,3272.5,1142.5
+IA,5,31074,6069,1307
+IT,6,20042,4048.5,789.5
