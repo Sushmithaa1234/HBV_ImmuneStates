@@ -1,0 +1,5 @@
+Criterion,Cells,Percent_of_input
+Below minimum genes,0,0
+Above maximum genes,0,0
+Above mitochondrial threshold,0,0
+Passing all fixed QC criteria,106592,100
