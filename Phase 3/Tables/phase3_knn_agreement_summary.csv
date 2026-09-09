@@ -1,0 +1,10 @@
+"Metric","Value"
+"Query cells",105220
+"Reference cells",20000
+"PCA dimensions",50
+"KNN k",30
+"Cells assigned",105220
+"Mean agreement",0.911660647532155
+"Median agreement",1
+"Minimum agreement",0.266666666666667
+"Maximum agreement",1

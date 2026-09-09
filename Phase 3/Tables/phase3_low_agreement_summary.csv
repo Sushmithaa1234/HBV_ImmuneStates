@@ -1,0 +1,9 @@
+"Metric","Value","Fraction"
+"Total transferred cells",105220,NA
+"Low agreement cells",17819,0.169349933472724
+"Low margin cells",4954,0.0470823037445353
+"Low-confidence cells",17819,0.169349933472724
+"Intermediate-confidence cells",0,0
+"High-confidence cells",87401,0.830650066527276
+"Low agreement threshold",0.8,NA
+"Low margin threshold",0.2,NA

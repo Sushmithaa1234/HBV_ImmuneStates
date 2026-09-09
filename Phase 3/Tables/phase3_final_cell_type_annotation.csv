@@ -1,0 +1,18 @@
+Cluster,Final_CellType,Cell_Count,Cell_Percent,Module_Label,Module_Score_Gap,Marker_Overlap_Label,Marker_Overlap_Count,SingleR_Label,SingleR_Delta_Next,Confidence,Rationale
+0,CD8_T,3003,15.02,CD8_T,0.15832161118715005,NA,0,Effector memory CD8 T cells,0.0574402437343795,High,CD8_T module and effector-memory CD8 T-cell SingleR annotation agree.
+1,GammaDelta_T,2425,12.12,NK,0.6598136013817453,NA,0,Non-Vd2 gd T cells,0.12048257508677608,Moderate,"SingleR supports non-Vd2 gamma-delta T cells, while the module score favors NK; retained as GammaDelta_T with moderate confidence."
+10,MAIT,779,3.9,MAIT,0.3130472938161484,NA,0,MAIT cells,0.4503909145075264,High,MAIT module and MAIT-cell SingleR annotation agree.
+11,Inflammatory_Myeloid,712,3.56,Monocyte_Myeloid,0.3351133286019874,NA,0,Classical monocytes,0.2315480299907351,High,Monocyte_Myeloid module and classical-monocyte SingleR annotation agree.
+12,B_Cell,708,3.54,B_Cell,1.4511108952632232,NA,0,Non-switched memory B cells,0.00655906589378441,High,B-cell module and non-switched memory B-cell SingleR annotation agree.
+13,NK,285,1.43,NK,0.9986334829143544,NA,0,Natural killer cells,0.1104269996287104,High,NK module and natural-killer-cell SingleR annotation agree.
+14,NK,267,1.33,NK,0.4034409439885551,NA,0,Natural killer cells,0.06267891808727172,High,NK module and natural-killer-cell SingleR annotation agree.
+15,Plasma_Cell,175,0.88,Plasma_Cell,1.3870853147473423,NA,0,Plasmablasts,0.09336856198407197,High,Plasma-cell module and plasmablast SingleR annotation agree.
+16,pDC,61,0.3,pDC,0.8878948196748306,NA,0,Plasmacytoid dendritic cells,0.17074821170168086,High,pDC module and plasmacytoid dendritic-cell SingleR annotation agree.
+2,CD4_T,2230,11.15,CD4_T,0.3947058402395385,NA,0,Th1/Th17 cells,0.07660522285259941,High,CD4_T module and Th1/Th17 SingleR annotation support CD4 T-cell identity.
+3,CD8_T,1864,9.32,CD8_T,0.08136304640633196,NA,0,Effector memory CD8 T cells,0.06958564964509928,High,CD8_T module and effector-memory CD8 T-cell SingleR annotation agree.
+4,NK,1570,7.85,NK,0.3814403554360712,NA,0,Natural killer cells,0.21020710043344548,High,NK module and natural-killer-cell SingleR annotation agree.
+5,MAIT,1533,7.66,MAIT,0.4753513250282352,NA,0,MAIT cells,0.8043908764235176,High,MAIT module and MAIT-cell SingleR annotation agree.
+6,CD8_T,1386,6.93,CD8_T,0.0891307948298411,NA,0,Effector memory CD8 T cells,0.1035481557663025,Moderate,"CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, with a modest module-score gap."
+7,CD8_T,1206,6.03,CD8_T,0.11918723517583274,NA,0,Effector memory CD8 T cells,0.05496321231583201,Moderate,"CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, with moderate module-score separation."
+8,CD4_T,994,4.97,CD4_T,0.02008332604965379,NA,0,MAIT cells,0.07484758632962774,Low,"CD4_T module is weakly favored, while SingleR favors MAIT; retained as CD4_T with low confidence."
+9,CD8_T,802,4.01,CD8_T,0.07658682246909976,NA,0,Effector memory CD8 T cells,0.00841201759520826,Low,"CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, but the SingleR separation is weak."
