@@ -4,32 +4,39 @@
 #
 # Script: phase_03_01_atlas_construction.R
 #
-# Sections:
-#   1  — Environment setup
-#   2  — Load QC-filtered singlet object + metadata checks
-#   3  — Confirm only singlets are retained
-#   4  — Log-normalization
-#   5  — Identify top 2,000 highly variable genes using VST
-#   6  — Global 20,000-cell leverage-score sketch
-#   7  — Sketch representation by sample
-#   8  — Scale the 20,000-cell sketch
-#   9  — Separate the 20,000-cell atlas sketch
-#   10 — PCA on the atlas sketch
-#   11 — Select PCs 1–20
-#   12 — Neighbour graph + clustering
-#   13 — UMAP
-#   14 — Global UMAP by cluster
-#   15 — UMAP by clinical state
-#   16 — UMAP by donor
+# Purpose:
+# Construct a representative global reference atlas from the complete
+# Phase 2 QC-retained dataset.
+#
+# Strategy:
+# 1. Load the Phase 2 processed-expression object.
+# 2. Verify processed log-CP10K expression and metadata.
+# 3. Do NOT re-normalize the supplied expression.
+# 4. Identify 2,000 consensus highly variable genes across the 23 samples.
+# 5. Construct a 20,000-cell global reference sketch:
+#    - all 23 samples/donors represented;
+#    - minimum 20-cell safeguard per sample;
+#    - remaining cells allocated approximately proportionally;
+#    - within-sample leverage-score-weighted sampling without replacement.
+# 6. Validate sample, donor, and clinical-state representation.
+# 7. Scale the 20,000-cell reference using the 2,000 HVGs.
+# 8. Perform PCA, neighbour graph construction, clustering, and UMAP.
+# 9. Generate global atlas diagnostics by cluster, clinical state, and donor.
 #
 # Biological framing:
-#   Clinical states are treated as cohort-level comparisons rather than a
-#   presumed linear disease trajectory.
+# Clinical states are treated as cohort-level comparisons rather than a
+# presumed linear disease trajectory.
 #
 # Important:
-#   The full QC-filtered dataset is retained unchanged.
-#   The 20,000-cell atlas is a representative sketch used for exploratory
-#   dimensionality reduction, clustering, and global annotation.
+# The complete Phase 2 dataset is retained unchanged.
+# The 20,000-cell atlas is a reference sketch used for exploratory
+# dimensionality reduction, clustering, and global annotation.
+#
+# Input:
+# results/rds_objects/seurat_qc_processed_expression.rds
+#
+# Output:
+# results/rds_objects/phase3_atlas_sketch_umap_clustered.rds
 #
 # ============================================================================
 
@@ -81,13 +88,13 @@ cat("✓ Output directories verified\n\n")
 
 
 # ============================================================================
-# SECTION 2 — LOAD QC-FILTERED SINGLET OBJECT + METADATA CHECKS
+# SECTION 2 — LOAD PHASE 2 OBJECT + DATASET VALIDATION
 # ============================================================================
 
-cat("=== SECTION 2: LOADING QC-FILTERED SINGLET OBJECT ===\n\n")
+cat("=== SECTION 2: LOADING PHASE 2 QC OBJECT ===\n\n")
 
 seurat_obj <- readRDS(
-  "results/rds_objects/seurat_qc_singlets.rds"
+  "results/rds_objects/seurat_qc_processed_expression.rds"
 )
 
 DefaultAssay(seurat_obj) <- "RNA"
@@ -133,7 +140,53 @@ cat(
 
 
 # ----------------------------------------------------------------------------
-# 2.1 — Required metadata
+# 2.1 — Validate expected dataset dimensions
+# ----------------------------------------------------------------------------
+
+if (ncol(seurat_obj) != 106592) {
+  
+  stop(
+    "ERROR: Expected 106,592 cells but found ",
+    ncol(seurat_obj),
+    "."
+  )
+}
+
+if (nrow(seurat_obj) != 24452) {
+  
+  stop(
+    "ERROR: Expected 24,452 genes but found ",
+    nrow(seurat_obj),
+    "."
+  )
+}
+
+if (dplyr::n_distinct(seurat_obj$GSM) != 23) {
+  
+  stop(
+    "ERROR: Expected 23 samples."
+  )
+}
+
+if (dplyr::n_distinct(seurat_obj$Donor) != 23) {
+  
+  stop(
+    "ERROR: Expected 23 donors."
+  )
+}
+
+if (dplyr::n_distinct(seurat_obj$Phase) != 5) {
+  
+  stop(
+    "ERROR: Expected 5 clinical states."
+  )
+}
+
+cat("✓ Dataset dimensions match Phase 2 checkpoint\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 2.2 — Required metadata
 # ----------------------------------------------------------------------------
 
 required_metadata <- c(
@@ -156,11 +209,10 @@ if (length(missing_metadata) > 0) {
       collapse = ", "
     )
   )
-  
 }
 
-cat("✓ Required metadata columns present:\n")
 cat(
+  "✓ Required metadata present:",
   paste(
     required_metadata,
     collapse = ", "
@@ -170,215 +222,423 @@ cat(
 
 
 # ----------------------------------------------------------------------------
-# 2.2 — Metadata overview
+# 2.3 — Confirm sample-specific processed data layers
 # ----------------------------------------------------------------------------
 
-metadata_overview <- seurat_obj@meta.data %>%
-  summarise(
-    Cells = n(),
-    Samples = n_distinct(GSM),
-    Donors = n_distinct(Donor),
-    Clinical_States = n_distinct(Phase)
+rna_layers <- Layers(
+  seurat_obj[["RNA"]]
+)
+
+data_layers <- grep(
+  "^data(\\.|$)",
+  rna_layers,
+  value = TRUE
+)
+
+counts_layers <- grep(
+  "^counts(\\.|$)",
+  rna_layers,
+  value = TRUE
+)
+
+cat(
+  "Sample-specific processed data layers:",
+  length(data_layers),
+  "\n"
+)
+
+cat(
+  "Raw counts layers:",
+  length(counts_layers),
+  "\n\n"
+)
+
+if (length(data_layers) != 23) {
+  
+  stop(
+    "ERROR: Expected 23 sample-specific processed data layers, found ",
+    length(data_layers),
+    "."
   )
+}
 
-print(metadata_overview)
+if (length(counts_layers) > 0) {
+  
+  stop(
+    "ERROR: Unexpected raw counts layers detected. ",
+    "The Phase 2 object is expected to contain processed expression only."
+  )
+}
 
-cat("\n")
+cat("✓ Processed-expression layer structure confirmed\n")
+cat("✓ No raw UMI counts layers present\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 2.3 — Sample-level cell counts
+# 2.4 — Confirm layer-to-sample correspondence
 # ----------------------------------------------------------------------------
 
-dataset_snapshot <- seurat_obj@meta.data %>%
-  dplyr::count(
+expected_data_layers <- paste0(
+  "data.",
+  sort(
+    unique(
+      seurat_obj$GSM
+    )
+  )
+)
+
+observed_data_layers <- sort(
+  data_layers
+)
+
+if (!identical(
+  observed_data_layers,
+  expected_data_layers
+)) {
+  
+  stop(
+    "ERROR: Processed data layers do not correspond exactly to the 23 GSMs."
+  )
+}
+
+cat("✓ All 23 GSM-specific data layers correspond to metadata samples\n\n")
+
+
+# ============================================================================
+# SECTION 3 — CONFIRM FULL DATASET IS RETAINED
+# ============================================================================
+
+cat("=== SECTION 3: FULL DATASET RETENTION VALIDATION ===\n\n")
+
+sample_snapshot <- seurat_obj@meta.data %>%
+  count(
     GSM,
     Donor,
     Phase,
     name = "Cells"
   ) %>%
-  dplyr::arrange(
+  arrange(
     Phase,
     GSM
   )
 
-cat("Cell counts by sample:\n\n")
+cat("Sample-level cell counts:\n\n")
 
-print(dataset_snapshot)
-
-write_csv(
-  dataset_snapshot,
-  "results/tables/phase3_dataset_snapshot.csv"
+print(
+  sample_snapshot
 )
-
-cat("\n✓ Dataset snapshot saved\n\n")
-
-
-# ============================================================================
-# SECTION 3 — CONFIRM ONLY SINGLET CELLS ARE RETAINED
-# ============================================================================
-
-cat("=== SECTION 3: SINGLET VALIDATION ===\n\n")
-
-if (
-  !"scDblFinder.class" %in%
-  colnames(seurat_obj@meta.data)
-) {
-  
-  stop(
-    "ERROR: 'scDblFinder.class' metadata column is not present. ",
-    "Cannot verify singlet retention."
-  )
-  
-}
-
-singlet_table <- table(
-  seurat_obj$scDblFinder.class,
-  useNA = "ifany"
-)
-
-cat("scDblFinder classification:\n\n")
-
-print(singlet_table)
 
 cat("\n")
 
-
-# ----------------------------------------------------------------------------
-# 3.1 — Explicit validation
-# ----------------------------------------------------------------------------
-
-non_singlet_cells <- sum(
-  seurat_obj$scDblFinder.class != "singlet",
-  na.rm = TRUE
+write_csv(
+  sample_snapshot,
+  "results/tables/phase3_dataset_snapshot.csv"
 )
 
-missing_classification <- sum(
-  is.na(
-    seurat_obj$scDblFinder.class
-  )
-)
-
-if (non_singlet_cells > 0) {
-  
-  stop(
-    "ERROR: ",
-    non_singlet_cells,
-    " non-singlet cells remain in the input object."
-  )
-  
-}
-
-if (missing_classification > 0) {
-  
-  stop(
-    "ERROR: ",
-    missing_classification,
-    " cells have missing scDblFinder classifications."
-  )
-  
-}
-
-cat(
-  "✓ All retained cells are classified as singlets\n"
-)
-
-cat(
-  "✓ No doublets retained\n"
-)
-
-cat(
-  "✓ No cells have missing doublet classifications\n\n"
-)
+cat("✓ Dataset snapshot saved\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 3.2 — Save singlet validation summary
+# 3.1 — Clinical-state counts
 # ----------------------------------------------------------------------------
 
-singlet_validation <- tibble(
-  
-  Total_Cells = ncol(seurat_obj),
-  
-  Singlet_Cells = sum(
-    seurat_obj$scDblFinder.class == "singlet"
-  ),
-  
-  Doublet_Cells = sum(
-    seurat_obj$scDblFinder.class == "doublet"
-  ),
-  
-  Missing_Classification = sum(
-    is.na(
-      seurat_obj$scDblFinder.class
-    )
+phase_snapshot <- seurat_obj@meta.data %>%
+  count(
+    Phase,
+    name = "Cells"
+  ) %>%
+  arrange(
+    Phase
   )
-  
+
+cat("Clinical-state cell counts:\n\n")
+
+print(
+  phase_snapshot
 )
+
+cat("\n")
 
 write_csv(
-  singlet_validation,
-  "results/tables/phase3_singlet_validation.csv"
+  phase_snapshot,
+  "results/tables/phase3_clinical_state_snapshot.csv"
+)
+
+cat("✓ Clinical-state snapshot saved\n\n")
+
+
+# ============================================================================
+# SECTION 4 — USE SUPPLIED PROCESSED EXPRESSION
+# ============================================================================
+#
+# The GEO matrices supplied to Phase 2 are already processed log-CP10K
+# expression values.
+#
+# Therefore:
+#
+# - no additional LogNormalize step is performed;
+# - no raw UMI counts are reconstructed;
+# - the supplied expression representation is retained.
+#
+# HVG selection below is performed directly from these supplied expression
+# values, independently within each sample layer.
+#
+# ============================================================================
+
+cat("=== SECTION 4: PROCESSED EXPRESSION VALIDATION ===\n\n")
+
+cat(
+  "Expression representation:",
+  "processed log-CP10K\n"
 )
 
 cat(
-  "✓ Singlet validation summary saved\n\n"
+  "Additional normalization:",
+  "NOT PERFORMED\n\n"
 )
+
+cat("✓ Supplied processed expression will be used directly\n")
+cat("✓ No double-normalization performed\n\n")
 
 
 # ============================================================================
-# SECTION 4 — LOG-NORMALIZATION
-# ============================================================================
-
-cat("=== SECTION 4: LOG-NORMALIZATION ===\n\n")
-
-DefaultAssay(seurat_obj) <- "RNA"
-
-seurat_obj <- NormalizeData(
-  
-  object = seurat_obj,
-  
-  assay = "RNA",
-  
-  normalization.method = "LogNormalize",
-  
-  scale.factor = 10000,
-  
-  verbose = TRUE
-  
-)
-
-cat(
-  "\n✓ Log-normalization complete\n\n"
-)
-
-
-# ============================================================================
-# SECTION 5 — HIGHLY VARIABLE FEATURES
+# SECTION 5 — CONSENSUS HIGHLY VARIABLE GENES
 # ============================================================================
 
 cat("=== SECTION 5: HIGHLY VARIABLE GENES ===\n\n")
 
-seurat_obj <- FindVariableFeatures(
-  
-  object = seurat_obj,
-  
-  assay = "RNA",
-  
-  selection.method = "vst",
-  
-  nfeatures = 2000,
-  
-  verbose = TRUE
-  
+rna <- seurat_obj[["RNA"]]
+
+data_layers <- grep(
+  "^data(\\.|$)",
+  Layers(rna),
+  value = TRUE
 )
 
-hvg <- VariableFeatures(
-  seurat_obj
-)
+if (length(data_layers) != 23) {
+  
+  stop(
+    "ERROR: Expected 23 data layers, found ",
+    length(data_layers),
+    "."
+  )
+}
 
 cat(
-  "\nNumber of highly variable genes:",
+  "Calculating HVGs independently across ",
+  length(data_layers),
+  " sample layers...\n\n"
+)
+
+
+# ----------------------------------------------------------------------------
+# 5.1 — Calculate per-sample HVGs
+# ----------------------------------------------------------------------------
+#
+# The source matrices contain processed log-CP10K values and no raw counts.
+#
+# A temporary legacy Assay is therefore constructed using ONLY the existing
+# processed expression in its data slot.
+#
+# This does NOT:
+# - create fake counts;
+# - perform normalization;
+# - alter the Phase 2 object.
+#
+# It simply provides FindVariableFeatures with a single data matrix rather
+# than a multi-layer Assay5 whose default layer is ambiguous.
+# ----------------------------------------------------------------------------
+
+layer_hvgs <- vector(
+  mode = "list",
+  length = length(data_layers)
+)
+
+names(layer_hvgs) <- data_layers
+
+for (layer_name in data_layers) {
+  
+  cat(
+    "Processing:",
+    layer_name,
+    "\n"
+  )
+  
+  layer_matrix <- LayerData(
+    object = rna,
+    layer = layer_name
+  )
+  
+  if (ncol(layer_matrix) == 0) {
+    
+    stop(
+      "ERROR: Layer ",
+      layer_name,
+      " contains zero cells."
+    )
+  }
+  
+  if (nrow(layer_matrix) != nrow(seurat_obj)) {
+    
+    stop(
+      "ERROR: Layer ",
+      layer_name,
+      " does not contain the expected 24,452 genes."
+    )
+  }
+  
+  # Create a temporary legacy Assay with the existing processed
+  # expression stored directly as the data layer.
+  #
+  # IMPORTANT:
+  # This is NOT a counts matrix.
+  temporary_assay <- CreateAssayObject(
+    data = layer_matrix
+  )
+  
+  temporary_assay <- FindVariableFeatures(
+    object = temporary_assay,
+    selection.method = "vst",
+    nfeatures = 2000,
+    verbose = FALSE
+  )
+  
+  current_hvgs <- VariableFeatures(
+    temporary_assay
+  )
+  
+  if (length(current_hvgs) != 2000) {
+    
+    stop(
+      "ERROR: ",
+      layer_name,
+      " returned ",
+      length(current_hvgs),
+      " HVGs instead of 2,000."
+    )
+  }
+  
+  layer_hvgs[[layer_name]] <- current_hvgs
+  
+  rm(
+    layer_matrix,
+    temporary_assay,
+    current_hvgs
+  )
+  
+  gc()
+}
+
+cat("\n✓ Per-sample HVG calculation complete\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 5.2 — Build per-sample HVG ranking table
+# ----------------------------------------------------------------------------
+
+hvg_rank_table <- purrr::map2_dfr(
+  
+  layer_hvgs,
+  
+  names(layer_hvgs),
+  
+  ~ tibble(
+    
+    Gene = .x,
+    
+    Sample = .y,
+    
+    Rank = seq_along(.x)
+    
+  )
+)
+
+if (nrow(hvg_rank_table) != 23 * 2000) {
+  
+  stop(
+    "ERROR: Expected 46,000 per-sample HVG records."
+  )
+}
+
+cat(
+  "Per-sample HVG records:",
+  nrow(hvg_rank_table),
+  "\n\n"
+)
+
+
+# ----------------------------------------------------------------------------
+# 5.3 — Frequency of HVG selection across samples
+# ----------------------------------------------------------------------------
+
+hvg_frequency <- hvg_rank_table %>%
+  count(
+    Gene,
+    name = "Frequency"
+  )
+
+
+# ----------------------------------------------------------------------------
+# 5.4 — Median HVG rank across samples
+# ----------------------------------------------------------------------------
+
+hvg_median_rank <- hvg_rank_table %>%
+  group_by(
+    Gene
+  ) %>%
+  summarise(
+    Median_Rank = median(Rank),
+    .groups = "drop"
+  )
+
+
+# ----------------------------------------------------------------------------
+# 5.5 — Consensus ranking
+# ----------------------------------------------------------------------------
+#
+# Ranking principle:
+#
+# 1. genes selected as HVGs in more samples are prioritized;
+# 2. median HVG rank breaks ties;
+# 3. gene name provides deterministic final tie-breaking.
+#
+# This is the same general frequency + median-rank logic documented by
+# Seurat for consensus integration-feature selection.
+# ----------------------------------------------------------------------------
+
+hvg_consensus <- hvg_frequency %>%
+  left_join(
+    hvg_median_rank,
+    by = "Gene"
+  ) %>%
+  arrange(
+    desc(Frequency),
+    Median_Rank,
+    Gene
+  )
+
+if (nrow(hvg_consensus) < 2000) {
+  
+  stop(
+    "ERROR: Fewer than 2,000 consensus HVG candidates were available."
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# 5.6 — Select final 2,000 HVGs
+# ----------------------------------------------------------------------------
+
+hvg <- hvg_consensus %>%
+  slice_head(
+    n = 2000
+  ) %>%
+  pull(
+    Gene
+  )
+
+cat(
+  "Number of consensus highly variable genes:",
   length(hvg),
   "\n"
 )
@@ -386,69 +646,79 @@ cat(
 if (length(hvg) != 2000) {
   
   stop(
-    "ERROR: Expected exactly 2,000 highly variable genes, but ",
-    length(hvg),
-    " were identified."
+    "ERROR: Expected exactly 2,000 consensus HVGs."
   )
-  
 }
 
+VariableFeatures(seurat_obj) <- hvg
+
+cat("✓ Exactly 2,000 consensus HVGs assigned\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 5.7 — HVG frequency diagnostics
+# ----------------------------------------------------------------------------
+
 cat(
-  "✓ Exactly 2,000 HVGs identified using VST\n\n"
+  "HVGs selected in all 23 samples:",
+  sum(hvg_consensus$Frequency >= 23),
+  "\n"
 )
 
+cat(
+  "HVGs selected in >= 20 samples:",
+  sum(hvg_consensus$Frequency >= 20),
+  "\n"
+)
 
-# ----------------------------------------------------------------------------
-# 5.1 — Save HVG list
-# ----------------------------------------------------------------------------
-
-hvg_table <- tibble(
-  Rank = seq_along(hvg),
-  Gene = hvg
+cat(
+  "HVGs selected in >= 15 samples:",
+  sum(hvg_consensus$Frequency >= 15),
+  "\n\n"
 )
 
 write_csv(
-  hvg_table,
-  "results/tables/phase3_highly_variable_genes.csv"
+  hvg_consensus,
+  "results/tables/phase3_hvg_consensus_ranking.csv"
 )
 
-cat(
-  "✓ HVG list saved\n\n"
+write_csv(
+  tibble(
+    HVG = hvg,
+    Frequency =
+      hvg_consensus$Frequency[
+        match(
+          hvg,
+          hvg_consensus$Gene
+        )
+      ],
+    Median_Rank =
+      hvg_consensus$Median_Rank[
+        match(
+          hvg,
+          hvg_consensus$Gene
+        )
+      ]
+  ),
+  "results/tables/phase3_final_2000_hvgs.csv"
 )
+
+cat("✓ HVG diagnostics saved\n\n")
 
 
 # ============================================================================
 # SECTION 6 — GLOBAL 20,000-CELL LEVERAGE-SCORE SKETCH
 # ============================================================================
-#
-# The QC-filtered dataset contains approximately 105,000 singlet cells
-# across 23 sample/donor layers.
-#
-# A representative global sketch of exactly 20,000 cells is constructed.
-#
-# IMPORTANT:
-#   Seurat's SketchData() treats a single ncells value as a per-layer
-#   request. Therefore, it is NOT used here to construct the global
-#   20,000-cell sketch.
-#
-# Instead:
-#   1. Sample-specific RNA data layers are identified.
-#   2. Leverage scores are calculated independently within each sample.
-#   3. Exactly proportional numbers of cells are allocated to each sample.
-#   4. Cells are sampled without replacement with probability proportional
-#      to leverage score.
-#   5. The selected cells are extracted from the original object to create
-#      the actual 20,000-cell sketch object.
-#
-# The full object remains unchanged.
-#
-# ============================================================================
 
-cat("=== SECTION 6: GLOBAL LEVERAGE-SCORE SKETCH ===\n\n")
+cat("=== SECTION 6: GLOBAL 20,000-CELL SKETCH ===\n\n")
 
 target_sketch_cells <- 20000L
 
-total_cells <- ncol(seurat_obj)
+minimum_cells_per_sample <- 20L
+
+total_cells <- ncol(
+  seurat_obj
+)
 
 cat(
   "Full dataset:",
@@ -457,150 +727,155 @@ cat(
 )
 
 cat(
-  "Target global sketch:",
+  "Target sketch:",
   target_sketch_cells,
   "cells\n"
 )
 
 cat(
-  "Fraction represented:",
+  "Target fraction:",
   round(
     100 *
       target_sketch_cells /
       total_cells,
     2
   ),
-  "%\n\n"
+  "%\n"
 )
-
-if (
-  target_sketch_cells >= total_cells
-) {
-  
-  stop(
-    "ERROR: Target sketch size must be smaller than the full dataset."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 6.1 — Identify sample-specific data layers
-# ----------------------------------------------------------------------------
-
-data_layers <- Layers(
-  seurat_obj[["RNA"]],
-  search = "^data\\."
-)
-
-if (length(data_layers) == 0) {
-  
-  stop(
-    "ERROR: No sample-specific RNA data layers were found."
-  )
-}
 
 cat(
-  "Number of sample-specific data layers:",
-  length(data_layers),
+  "Minimum sample representation:",
+  minimum_cells_per_sample,
+  "cells\n\n"
+)
+
+
+# ----------------------------------------------------------------------------
+# 6.1 — Sample sizes
+# ----------------------------------------------------------------------------
+
+sample_sizes <- seurat_obj@meta.data %>%
+  count(
+    GSM,
+    Donor,
+    Phase,
+    name = "Original_Cells"
+  ) %>%
+  arrange(
+    GSM
+  )
+
+if (nrow(sample_sizes) != 23) {
+  
+  stop(
+    "ERROR: Expected 23 sample/donor records."
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# 6.2 — Validate minimum representation feasibility
+# ----------------------------------------------------------------------------
+
+minimum_required_cells <-
+  nrow(sample_sizes) *
+  minimum_cells_per_sample
+
+if (minimum_required_cells >= target_sketch_cells) {
+  
+  stop(
+    "ERROR: Minimum representation requirement exceeds sketch capacity."
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# 6.3 — Allocate minimum representation
+# ----------------------------------------------------------------------------
+
+sample_sizes <- sample_sizes %>%
+  mutate(
+    Minimum_Allocation =
+      minimum_cells_per_sample
+  )
+
+remaining_cells <-
+  target_sketch_cells -
+  sum(
+    sample_sizes$Minimum_Allocation
+  )
+
+cat(
+  "Cells reserved for minimum representation:",
+  sum(sample_sizes$Minimum_Allocation),
+  "\n"
+)
+
+cat(
+  "Cells remaining for proportional allocation:",
+  remaining_cells,
   "\n\n"
 )
 
 
 # ----------------------------------------------------------------------------
-# 6.2 — Verify that every layer corresponds to a GSM
-# ----------------------------------------------------------------------------
-
-layer_GSM <- sub(
-  "^data\\.",
-  "",
-  data_layers
-)
-
-if (
-  !all(
-    layer_GSM %in%
-    unique(seurat_obj$GSM)
-  )
-) {
-  
-  stop(
-    "ERROR: One or more RNA data layers could not be matched to a GSM."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 6.3 — Calculate sample sizes
-# ----------------------------------------------------------------------------
-
-sample_sizes <- seurat_obj@meta.data %>%
-  dplyr::count(
-    GSM,
-    name = "Original_Cells"
-  ) %>%
-  dplyr::arrange(GSM)
-
-cat(
-  "Sample sizes:\n\n"
-)
-
-print(sample_sizes)
-
-cat("\n")
-
-
-# ----------------------------------------------------------------------------
-# 6.4 — Allocate exactly 20,000 cells across samples
+# 6.4 — Allocate remaining cells approximately proportionally
 # ----------------------------------------------------------------------------
 #
-# Proportional allocation with largest-remainder rounding.
-#
+# Largest-remainder allocation is used so the final allocation is exactly
+# 20,000 cells.
 # ----------------------------------------------------------------------------
 
 sample_sizes <- sample_sizes %>%
   mutate(
-    
-    Exact_Allocation =
+    Proportional_Exact =
       Original_Cells /
       sum(Original_Cells) *
-      target_sketch_cells,
+      remaining_cells,
     
-    Base_Allocation =
+    Proportional_Base =
       floor(
-        Exact_Allocation
+        Proportional_Exact
       ),
     
-    Fractional_Remainder =
-      Exact_Allocation -
-      Base_Allocation
-    
+    Proportional_Remainder =
+      Proportional_Exact -
+      Proportional_Base
   )
 
-remaining_cells <- target_sketch_cells -
+cells_left_after_floor <-
+  remaining_cells -
   sum(
-    sample_sizes$Base_Allocation
+    sample_sizes$Proportional_Base
   )
 
-sample_sizes$Sketch_Cells <-
-  sample_sizes$Base_Allocation
-
-if (remaining_cells > 0) {
+if (cells_left_after_floor > 0) {
   
   extra_indices <- order(
-    sample_sizes$Fractional_Remainder,
+    sample_sizes$Proportional_Remainder,
     decreasing = TRUE
-  )[seq_len(remaining_cells)]
+  )[seq_len(
+    cells_left_after_floor
+  )]
   
-  sample_sizes$Sketch_Cells[
+  sample_sizes$Proportional_Base[
     extra_indices
   ] <-
-    sample_sizes$Sketch_Cells[
+    sample_sizes$Proportional_Base[
       extra_indices
     ] + 1L
 }
 
+
+# ----------------------------------------------------------------------------
+# 6.5 — Final allocation
+# ----------------------------------------------------------------------------
+
 sample_sizes <- sample_sizes %>%
   mutate(
+    Sketch_Cells =
+      Minimum_Allocation +
+      Proportional_Base,
     
     Sketch_Fraction =
       Sketch_Cells /
@@ -609,20 +884,15 @@ sample_sizes <- sample_sizes %>%
     Sketch_Percent =
       100 *
       Sketch_Fraction
-    
   )
 
-cat(
-  "Proportional sketch allocation:\n\n"
+cat("Final sample allocation:\n\n")
+
+print(
+  sample_sizes
 )
 
-print(sample_sizes)
-
-cat(
-  "\nTotal allocated cells:",
-  sum(sample_sizes$Sketch_Cells),
-  "\n\n"
-)
+cat("\n")
 
 if (
   sum(sample_sizes$Sketch_Cells) !=
@@ -630,37 +900,82 @@ if (
 ) {
   
   stop(
-    "ERROR: Sample allocations do not sum to exactly 20,000 cells."
+    "ERROR: Final sample allocations do not sum to exactly 20,000."
   )
 }
 
+if (
+  any(
+    sample_sizes$Sketch_Cells >
+    sample_sizes$Original_Cells
+  )
+) {
+  
+  stop(
+    "ERROR: A sample was allocated more sketch cells than available cells."
+  )
+}
 
-# ----------------------------------------------------------------------------
-# 6.5 — Calculate leverage scores within each sample
-# ----------------------------------------------------------------------------
+cat("✓ Exactly 20,000 cells allocated across 23 samples\n")
 
 cat(
-  "=== CALCULATING LEVERAGE SCORES ===\n\n"
+  "✓ Every sample receives at least",
+  minimum_cells_per_sample,
+  "cells\n\n"
+)
+
+
+# ----------------------------------------------------------------------------
+# 6.6 — Save allocation table
+# ----------------------------------------------------------------------------
+
+write_csv(
+  sample_sizes,
+  "results/tables/phase3_sketch_allocation_by_sample.csv"
+)
+
+cat("✓ Sketch allocation table saved\n\n")
+
+# ============================================================================
+# SECTION 6.7 — CALCULATE SAMPLE-SPECIFIC LEVERAGE SCORES
+# ============================================================================
+#
+# The leverage score is calculated from a low-dimensional PCA representation
+# of the 2,000 consensus HVGs within each sample.
+#
+# This avoids asking LeverageScore() to perform its internal decomposition
+# directly on a 2,000-feature × many-cell matrix, which can become
+# numerically unstable for this data representation.
+#
+# The resulting leverage scores are then used for within-sample
+# probability-weighted sampling without replacement.
+#
+# ============================================================================
+
+cat(
+  "=== CALCULATING SAMPLE-SPECIFIC LEVERAGE SCORES ===\n\n"
 )
 
 leverage_scores <- vector(
   mode = "list",
-  length = length(data_layers)
+  length = nrow(sample_sizes)
 )
 
-names(leverage_scores) <- data_layers
+names(leverage_scores) <-
+  sample_sizes$GSM
 
 
 for (
-  i in seq_along(data_layers)
+  i in seq_len(
+    nrow(sample_sizes)
+  )
 ) {
   
-  layer_name <- data_layers[i]
+  GSM_id <- sample_sizes$GSM[i]
   
-  GSM_id <- sub(
-    "^data\\.",
-    "",
-    layer_name
+  layer_name <- paste0(
+    "data.",
+    GSM_id
   )
   
   cat(
@@ -671,15 +986,14 @@ for (
   
   
   # --------------------------------------------------------------------------
-  # Extract normalized expression for the 2,000 HVGs
+  # Extract consensus HVGs from the sample-specific processed-expression layer
   # --------------------------------------------------------------------------
   
   layer_matrix <- LayerData(
     object = seurat_obj[["RNA"]],
     layer = layer_name,
-    features = VariableFeatures(seurat_obj)
+    features = hvg
   )
-  
   
   if (
     ncol(layer_matrix) == 0
@@ -694,47 +1008,194 @@ for (
   
   
   # --------------------------------------------------------------------------
-  # Calculate leverage scores
+  # Transpose to cell × gene orientation
   # --------------------------------------------------------------------------
   
-  score_vector <- LeverageScore(
-    
-    object = layer_matrix,
-    
-    nsketch = min(
-      5000L,
-      ncol(layer_matrix)
-    ),
-    
-    seed = 12345,
-    
-    verbose = FALSE
-    
+  cell_by_gene <- t(
+    as.matrix(layer_matrix)
   )
   
   
-  score_vector <- as.numeric(
-    score_vector
+  n_cells <- nrow(
+    cell_by_gene
   )
   
-  names(score_vector) <- colnames(
-    layer_matrix
+  n_features <- ncol(
+    cell_by_gene
   )
   
+  
+  # --------------------------------------------------------------------------
+  # Determine a valid PCA dimensionality.
+  #
+  # We use up to 50 dimensions, but never more than the mathematical rank
+  # permitted by the number of cells.
+  #
+  # The very small 66-cell sample therefore uses at most 50 dimensions,
+  # while larger samples also use 50.
+  # --------------------------------------------------------------------------
+  
+  n_pca_dims <- min(
+    50L,
+    n_cells - 1L,
+    n_features
+  )
   
   if (
-    length(score_vector) !=
-    ncol(layer_matrix)
+    n_pca_dims < 2L
   ) {
     
     stop(
-      "ERROR: Leverage-score vector length does not match cell count ",
-      "for ",
+      "ERROR: ",
+      GSM_id,
+      " has insufficient cells/features for leverage calculation."
+    )
+  }
+  
+  
+  # --------------------------------------------------------------------------
+  # PCA of the sample-specific expression matrix
+  #
+  # prcomp() is used here because these are already processed expression
+  # values and we need a stable numerical representation for the leverage
+  # calculation.
+  # --------------------------------------------------------------------------
+  
+  pca_result <- tryCatch(
+    
+    {
+      
+      prcomp(
+        x =
+          cell_by_gene,
+        
+        center =
+          TRUE,
+        
+        scale. =
+          FALSE,
+        
+        rank. =
+          n_pca_dims
+      )
+      
+    },
+    
+    error = function(e) {
+      
+      stop(
+        "ERROR: PCA failed for ",
+        GSM_id,
+        ".\n",
+        "Original error: ",
+        conditionMessage(e)
+      )
+      
+    }
+  )
+  
+  
+  # --------------------------------------------------------------------------
+  # Extract cell embeddings
+  # --------------------------------------------------------------------------
+  
+  cell_embeddings <- pca_result$x
+  
+  if (
+    ncol(cell_embeddings) < 2
+  ) {
+    
+    stop(
+      "ERROR: Fewer than 2 PCA dimensions were obtained for ",
       GSM_id,
       "."
     )
   }
   
+  
+  # --------------------------------------------------------------------------
+  # Calculate approximate leverage scores.
+  #
+  # For an orthogonal PCA score matrix U, leverage is proportional to the
+  # squared row norm of the cell coordinates after normalization by the
+  # singular-value scale.
+  #
+  # We calculate leverage from the normalized PCA left-singular vectors.
+  # --------------------------------------------------------------------------
+  
+  singular_values <- pca_result$sdev
+  
+  usable_dims <- min(
+    ncol(cell_embeddings),
+    sum(
+      singular_values >
+        sqrt(.Machine$double.eps)
+    )
+  )
+  
+  if (
+    usable_dims < 2
+  ) {
+    
+    stop(
+      "ERROR: Insufficient numerical rank for leverage calculation in ",
+      GSM_id,
+      "."
+    )
+  }
+  
+  normalized_embeddings <-
+    sweep(
+      cell_embeddings[
+        ,
+        seq_len(usable_dims),
+        drop = FALSE
+      ],
+      
+      MARGIN = 2,
+      
+      STATS = singular_values[
+        seq_len(usable_dims)
+      ],
+      
+      FUN = "/"
+    )
+  
+  
+  # Row-wise squared norm
+  score_vector <- rowSums(
+    normalized_embeddings^2
+  )
+  
+  
+  # --------------------------------------------------------------------------
+  # Add a small positive floor so every cell remains eligible for sampling.
+  # --------------------------------------------------------------------------
+  
+  score_vector <- pmax(
+    score_vector,
+    .Machine$double.eps
+  )
+  
+  names(score_vector) <-
+    rownames(cell_by_gene)
+  
+  
+  # --------------------------------------------------------------------------
+  # Validate scores
+  # --------------------------------------------------------------------------
+  
+  if (
+    length(score_vector) !=
+    n_cells
+  ) {
+    
+    stop(
+      "ERROR: Leverage-score vector length does not match cell count for ",
+      GSM_id,
+      "."
+    )
+  }
   
   if (
     any(
@@ -749,14 +1210,45 @@ for (
     )
   }
   
+  if (
+    any(
+      score_vector < 0
+    )
+  ) {
+    
+    stop(
+      "ERROR: Negative leverage scores detected in ",
+      GSM_id,
+      "."
+    )
+  }
   
-  leverage_scores[[layer_name]] <-
+  if (
+    sum(score_vector) <= 0
+  ) {
+    
+    stop(
+      "ERROR: Leverage scores sum to zero in ",
+      GSM_id,
+      "."
+    )
+  }
+  
+  
+  # Store scores
+  leverage_scores[[GSM_id]] <-
     score_vector
   
   
   cat(
     "  Cells:",
-    length(score_vector),
+    n_cells,
+    "\n"
+  )
+  
+  cat(
+    "  PCA dimensions:",
+    usable_dims,
     "\n"
   )
   
@@ -773,20 +1265,32 @@ for (
     ),
     "\n\n"
   )
+  
+  
+  rm(
+    layer_matrix,
+    cell_by_gene,
+    pca_result,
+    cell_embeddings,
+    singular_values,
+    normalized_embeddings,
+    score_vector
+  )
+  
+  gc()
 }
 
 
 cat(
-  "✓ Leverage scores calculated for all sample layers\n\n"
+  "✓ Leverage scores calculated for all 23 samples\n\n"
 )
 
-
-# ----------------------------------------------------------------------------
-# 6.6 — Select cells using leverage-score weighted sampling
-# ----------------------------------------------------------------------------
+# ============================================================================
+# SECTION 6.8 — LEVERAGE-SCORE-WEIGHTED SAMPLING
+# ============================================================================
 
 cat(
-  "=== SELECTING REPRESENTATIVE CELLS ===\n\n"
+  "=== SELECTING LEVERAGE-WEIGHTED REPRESENTATIVE CELLS ===\n\n"
 )
 
 selected_cells_by_sample <- vector(
@@ -796,7 +1300,6 @@ selected_cells_by_sample <- vector(
 
 names(selected_cells_by_sample) <-
   sample_sizes$GSM
-
 
 for (
   i in seq_len(
@@ -809,18 +1312,10 @@ for (
   n_to_select <-
     sample_sizes$Sketch_Cells[i]
   
-  layer_name <- paste0(
-    "data.",
-    GSM_id
-  )
-  
   scores <-
-    leverage_scores[[layer_name]]
+    leverage_scores[[GSM_id]]
   
-  
-  if (
-    is.null(scores)
-  ) {
+  if (is.null(scores)) {
     
     stop(
       "ERROR: No leverage scores found for ",
@@ -828,7 +1323,6 @@ for (
       "."
     )
   }
-  
   
   if (
     n_to_select >
@@ -842,25 +1336,43 @@ for (
       GSM_id,
       " but only ",
       length(scores),
-      " cells are available."
+      " are available."
     )
   }
   
+  
+  # --------------------------------------------------------------------------
+  # Convert leverage scores to sampling probabilities.
+  # --------------------------------------------------------------------------
+  
+  sampling_probabilities <-
+    scores /
+    sum(scores)
+  
+  if (
+    any(
+      !is.finite(
+        sampling_probabilities
+      )
+    )
+  ) {
+    
+    stop(
+      "ERROR: Invalid sampling probabilities for ",
+      GSM_id,
+      "."
+    )
+  }
   
   set.seed(
     12345 + i
   )
   
   selected_cells <- sample(
-    
     x = names(scores),
-    
     size = n_to_select,
-    
     replace = FALSE,
-    
-    prob = scores
-    
+    prob = sampling_probabilities
   )
   
   selected_cells_by_sample[[GSM_id]] <-
@@ -877,21 +1389,26 @@ for (
 }
 
 
-# ----------------------------------------------------------------------------
-# 6.7 — Combine selected cells
-# ----------------------------------------------------------------------------
+# ============================================================================
+# SECTION 6.9 — COMBINE AND VALIDATE SELECTED CELLS
+# ============================================================================
 
 sketch_cells <- unlist(
   selected_cells_by_sample,
   use.names = FALSE
 )
 
-sketch_cells <- unique(
-  sketch_cells
-)
+if (
+  anyDuplicated(sketch_cells) > 0
+) {
+  
+  stop(
+    "ERROR: Duplicate cell IDs were selected."
+  )
+}
 
 cat(
-  "\nTotal unique selected cells:",
+  "\nTotal selected cells:",
   length(sketch_cells),
   "\n"
 )
@@ -902,128 +1419,99 @@ if (
 ) {
   
   stop(
-    "ERROR: Exactly ",
+    "ERROR: Expected exactly ",
     target_sketch_cells,
-    " unique cells were expected, but ",
+    " cells but selected ",
     length(sketch_cells),
-    " were selected."
-  )
-}
-
-cat(
-  "✓ Exactly 20,000 unique cells selected\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 6.8 — Construct actual 20,000-cell sketch object
-# ----------------------------------------------------------------------------
-
-cat(
-  "Creating the 20,000-cell sketch object...\n\n"
-)
-
-sketch_obj <- subset(
-  x = seurat_obj,
-  cells = sketch_cells
-)
-
-
-# ----------------------------------------------------------------------------
-# 6.9 — Validate sketch dimensions
-# ----------------------------------------------------------------------------
-
-if (
-  ncol(sketch_obj) !=
-  target_sketch_cells
-) {
-  
-  stop(
-    "ERROR: Sketch object contains ",
-    ncol(sketch_obj),
-    " cells instead of exactly ",
-    target_sketch_cells,
     "."
   )
 }
 
-cat(
-  "✓ sketch_obj contains exactly",
-  ncol(sketch_obj),
-  "cells\n"
-)
+cat("✓ Exactly 20,000 unique cells selected\n\n")
+
+
+# ============================================================================
+# SECTION 6.10 — CREATE THE ATLAS SKETCH
+# ============================================================================
 
 cat(
-  "✓ Feature set:",
-  nrow(sketch_obj),
+  "Creating 20,000-cell atlas sketch...\n\n"
+)
+
+atlas_sketch <- subset(
+  x = seurat_obj,
+  cells = sketch_cells
+)
+
+if (
+  ncol(atlas_sketch) !=
+  target_sketch_cells
+) {
+  
+  stop(
+    "ERROR: Atlas sketch does not contain exactly 20,000 cells."
+  )
+}
+
+if (
+  nrow(atlas_sketch) !=
+  nrow(seurat_obj)
+) {
+  
+  stop(
+    "ERROR: Atlas sketch does not retain the full gene set."
+  )
+}
+
+cat(
+  "✓ Atlas sketch dimensions:",
+  ncol(atlas_sketch),
+  "cells ×",
+  nrow(atlas_sketch),
   "genes\n\n"
 )
 
 
 # ============================================================================
-# SECTION 7 — SKETCH REPRESENTATION BY SAMPLE
+# SECTION 7 — SKETCH REPRESENTATION AUDIT
 # ============================================================================
 
-cat("=== SECTION 7: SKETCH REPRESENTATION BY SAMPLE ===\n\n")
+cat("=== SECTION 7: SKETCH REPRESENTATION AUDIT ===\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 7.1 — Original sample counts
+# 7.1 — Sample representation
 # ----------------------------------------------------------------------------
 
-original_sample_counts <- table(
-  seurat_obj$GSM
-)
-
-original_sample_counts <- as.numeric(
-  original_sample_counts
-)
-
-names(original_sample_counts) <-
-  names(
-    table(seurat_obj$GSM)
+sketch_sample_counts <- atlas_sketch@meta.data %>%
+  count(
+    GSM,
+    Donor,
+    Phase,
+    name = "Sketch_Cells"
   )
 
-
-# ----------------------------------------------------------------------------
-# 7.2 — Sketch sample counts
-# ----------------------------------------------------------------------------
-
-sketch_sample_counts <- table(
-  sketch_obj$GSM
-)
-
-sketch_sample_counts <- as.numeric(
-  sketch_sample_counts
-)
-
-names(sketch_sample_counts) <-
-  names(
-    table(sketch_obj$GSM)
-  )
-
-
-# ----------------------------------------------------------------------------
-# 7.3 — Construct representation table
-# ----------------------------------------------------------------------------
-
-sketch_representation <- tibble(
-  
-  GSM =
-    names(original_sample_counts),
-  
-  Original_Cells =
-    unname(original_sample_counts),
-  
-  Sketch_Cells =
-    unname(
-      sketch_sample_counts[
-        names(original_sample_counts)
-      ]
+sketch_representation <- sample_sizes %>%
+  select(
+    GSM,
+    Donor,
+    Phase,
+    Original_Cells
+  ) %>%
+  left_join(
+    sketch_sample_counts,
+    by = c(
+      "GSM",
+      "Donor",
+      "Phase"
     )
-  
-) %>%
+  ) %>%
   mutate(
+    Sketch_Cells =
+      replace_na(
+        Sketch_Cells,
+        0L
+      ),
     
     Sketch_Fraction =
       Sketch_Cells /
@@ -1032,26 +1520,19 @@ sketch_representation <- tibble(
     Sketch_Percent =
       100 *
       Sketch_Fraction
-    
+  ) %>%
+  arrange(
+    Phase,
+    GSM
   )
 
+cat("Sample representation:\n\n")
 
-# ----------------------------------------------------------------------------
-# 7.4 — Validate representation
-# ----------------------------------------------------------------------------
+print(
+  sketch_representation
+)
 
-if (
-  any(
-    is.na(
-      sketch_representation$Sketch_Cells
-    )
-  )
-) {
-  
-  stop(
-    "ERROR: One or more original samples are absent from the sketch."
-  )
-}
+cat("\n")
 
 if (
   any(
@@ -1060,112 +1541,142 @@ if (
 ) {
   
   stop(
-    "ERROR: One or more samples have zero cells in the sketch."
+    "ERROR: One or more samples are absent from the atlas sketch."
   )
 }
 
 if (
-  sum(
-    sketch_representation$Sketch_Cells
-  ) !=
+  nrow(sketch_representation) != 23
+) {
+  
+  stop(
+    "ERROR: Expected 23 samples in the representation table."
+  )
+}
+
+if (
+  sum(sketch_representation$Sketch_Cells) !=
   target_sketch_cells
 ) {
   
   stop(
-    "ERROR: Sketch sample counts do not sum to 20,000."
+    "ERROR: Sample representation does not sum to 20,000 cells."
   )
 }
 
-if (
-  nrow(sketch_representation) !=
-  nrow(dataset_snapshot)
-) {
-  
-  stop(
-    "ERROR: Number of samples represented in sketch does not match ",
-    "the original dataset."
+cat("✓ All 23 samples represented\n")
+cat("✓ Sample representation totals exactly 20,000 cells\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 7.2 — Clinical-state representation
+# ----------------------------------------------------------------------------
+
+original_phase_counts <- seurat_obj@meta.data %>%
+  count(
+    Phase,
+    name = "Original_Cells"
   )
-}
 
+sketch_phase_counts <- atlas_sketch@meta.data %>%
+  count(
+    Phase,
+    name = "Sketch_Cells"
+  )
 
-# ----------------------------------------------------------------------------
-# 7.5 — Display representation
-# ----------------------------------------------------------------------------
+phase_representation <- original_phase_counts %>%
+  left_join(
+    sketch_phase_counts,
+    by = "Phase"
+  ) %>%
+  mutate(
+    Sketch_Fraction =
+      Sketch_Cells /
+      Original_Cells,
+    
+    Sketch_Percent =
+      100 *
+      Sketch_Fraction,
+    
+    Original_Fraction =
+      Original_Cells /
+      sum(Original_Cells),
+    
+    Sketch_Cohort_Fraction =
+      Sketch_Cells /
+      sum(Sketch_Cells)
+  ) %>%
+  arrange(
+    Phase
+  )
 
-cat(
-  "Sample-level sketch representation:\n\n"
-)
+cat("Clinical-state representation:\n\n")
 
 print(
-  sketch_representation,
-  n = Inf
+  phase_representation
 )
 
 cat("\n")
 
-cat(
-  "Original dataset cells:",
-  sum(sketch_representation$Original_Cells),
-  "\n"
+write_csv(
+  phase_representation,
+  "results/tables/phase3_sketch_representation_by_phase.csv"
 )
-
-cat(
-  "Sketch cells:",
-  sum(sketch_representation$Sketch_Cells),
-  "\n"
-)
-
-cat(
-  "Number of samples:",
-  nrow(sketch_representation),
-  "\n"
-)
-
-cat(
-  "Minimum sample representation:",
-  round(
-    min(sketch_representation$Sketch_Percent),
-    2
-  ),
-  "%\n"
-)
-
-cat(
-  "Maximum sample representation:",
-  round(
-    max(sketch_representation$Sketch_Percent),
-    2
-  ),
-  "%\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 7.6 — Save representation table
-# ----------------------------------------------------------------------------
 
 write_csv(
   sketch_representation,
   "results/tables/phase3_sketch_representation_by_sample.csv"
 )
 
-cat(
-  "✓ Sample-level sketch representation table saved.\n\n"
+cat("✓ Clinical-state representation saved\n")
+cat("✓ Sample representation saved\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 7.3 — Donor representation
+# ----------------------------------------------------------------------------
+
+donor_representation <- atlas_sketch@meta.data %>%
+  count(
+    Donor,
+    GSM,
+    Phase,
+    name = "Sketch_Cells"
+  ) %>%
+  arrange(
+    Phase,
+    GSM
+  )
+
+if (
+  nrow(donor_representation) != 23
+) {
+  
+  stop(
+    "ERROR: Expected 23 donors in the atlas sketch."
+  )
+}
+
+cat("✓ All 23 donors represented\n\n")
+
+write_csv(
+  donor_representation,
+  "results/tables/phase3_sketch_representation_by_donor.csv"
 )
 
 
 # ----------------------------------------------------------------------------
-# 7.7 — Plot original versus sketch representation
+# 7.4 — Representation plot
 # ----------------------------------------------------------------------------
 
 representation_plot_data <-
   sketch_representation %>%
-  dplyr::select(
+  select(
     GSM,
     Original_Cells,
     Sketch_Cells
   ) %>%
-  tidyr::pivot_longer(
+  pivot_longer(
     cols = c(
       Original_Cells,
       Sketch_Cells
@@ -1188,7 +1699,7 @@ p_sketch_representation <-
   ) +
   labs(
     title =
-      "Original Dataset and 20,000-Cell Sketch Representation",
+      "Original Dataset and 20,000-Cell Atlas Sketch",
     x =
       "Sample",
     y =
@@ -1203,6 +1714,7 @@ p_sketch_representation <-
         angle = 60,
         hjust = 1
       ),
+    
     plot.title =
       element_text(
         hjust = 0.5
@@ -1217,91 +1729,29 @@ ggsave(
   dpi = 300
 )
 
-cat(
-  "✓ Sketch representation plot saved.\n\n"
-)
-
-cat(
-  "=== SECTION 7 COMPLETE ===\n\n"
-)
+cat("✓ Sketch representation plot saved\n\n")
 
 
 # ============================================================================
-# SECTION 8 — SCALE THE 20,000-CELL SKETCH
+# SECTION 8 — SCALE THE 20,000-CELL ATLAS SKETCH
 # ============================================================================
 
-cat("=== SECTION 8: SCALING THE 20,000-CELL SKETCH ===\n\n")
+cat("=== SECTION 8: SCALING THE ATLAS SKETCH ===\n\n")
 
-sketch_cells <- colnames(
-  sketch_obj
-)
+VariableFeatures(atlas_sketch) <-
+  hvg
 
-n_sketch_cells <- length(
-  sketch_cells
-)
-
-cat(
-  "Sketch cells identified:",
-  n_sketch_cells,
-  "\n"
-)
-
-cat(
-  "Target sketch size:",
-  target_sketch_cells,
-  "\n\n"
-)
-
-if (
-  n_sketch_cells !=
-  target_sketch_cells
-) {
-  
-  stop(
-    "ERROR: Expected ",
-    target_sketch_cells,
-    " sketch cells, but found ",
-    n_sketch_cells,
-    "."
-  )
-}
-
-DefaultAssay(sketch_obj) <- "RNA"
-
-hvg <- VariableFeatures(
-  seurat_obj
-)
-
-if (
-  length(hvg) != 2000
-) {
-  
-  stop(
-    "ERROR: Expected 2,000 HVGs from Section 5, but found ",
-    length(hvg),
-    "."
-  )
-}
-
-sketch_hvg <- intersect(
-  hvg,
-  rownames(sketch_obj[["RNA"]])
-)
+sketch_hvg <-
+  VariableFeatures(atlas_sketch)
 
 if (
   length(sketch_hvg) != 2000
 ) {
   
   stop(
-    "ERROR: Expected all 2,000 HVGs to be present in the sketch, ",
-    "but only ",
-    length(sketch_hvg),
-    " were found."
+    "ERROR: Atlas sketch does not contain exactly 2,000 HVGs."
   )
 }
-
-VariableFeatures(sketch_obj) <-
-  sketch_hvg
 
 cat(
   "Scaling:",
@@ -1311,7 +1761,7 @@ cat(
 
 cat(
   "Cells:",
-  n_sketch_cells,
+  ncol(atlas_sketch),
   "\n\n"
 )
 
@@ -1320,21 +1770,14 @@ cat(
 # 8.1 — Scale sketch
 # ----------------------------------------------------------------------------
 
-sketch_obj <- ScaleData(
-  
-  object = sketch_obj,
-  
+atlas_sketch <- ScaleData(
+  object = atlas_sketch,
   assay = "RNA",
-  
   features = sketch_hvg,
-  
   verbose = TRUE
-  
 )
 
-cat(
-  "\n✓ Scaling completed successfully\n\n"
-)
+cat("\n✓ Scaling completed\n\n")
 
 
 # ----------------------------------------------------------------------------
@@ -1342,8 +1785,8 @@ cat(
 # ----------------------------------------------------------------------------
 
 scaled_layers <- Layers(
-  sketch_obj[["RNA"]],
-  search = "^scale.data"
+  atlas_sketch[["RNA"]],
+  search = "^scale\\.data"
 )
 
 cat(
@@ -1361,257 +1804,35 @@ if (
   )
 }
 
-cat(
-  "✓ Scaled-data layer successfully created\n\n"
-)
+cat("✓ Scaled-data representation detected\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 8.3 — Save checkpoint
-# ----------------------------------------------------------------------------
-
-saveRDS(
-  sketch_obj,
-  "results/rds_objects/phase3_sketch_scaled.rds"
-)
-
-cat(
-  "✓ Scaled sketch checkpoint saved:\n",
-  "  results/rds_objects/phase3_sketch_scaled.rds\n\n"
-)
-
-cat(
-  "=== SECTION 8 COMPLETE ===\n\n"
-)
-
-# ============================================================================
-# SECTION 9 — SEPARATE THE 20,000-CELL ATLAS SKETCH
-# ============================================================================
-
-cat("=== SECTION 9: SEPARATING THE 20,000-CELL ATLAS SKETCH ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 9.1 — Load scaled sketch checkpoint
-# ----------------------------------------------------------------------------
-
-sketch_obj <- readRDS(
-  "results/rds_objects/phase3_sketch_scaled.rds"
-)
-
-DefaultAssay(sketch_obj) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 9.2 — Identify sketch cells
-# ----------------------------------------------------------------------------
-
-sketch_cells <- colnames(
-  sketch_obj
-)
-
-n_sketch_cells <- length(
-  sketch_cells
-)
-
-cat(
-  "Cells represented by sketch:",
-  n_sketch_cells,
-  "\n"
-)
-
-cat(
-  "Expected sketch size:",
-  target_sketch_cells,
-  "\n\n"
-)
-
-if (
-  n_sketch_cells !=
-  target_sketch_cells
-) {
-  
-  stop(
-    "ERROR: The sketch contains ",
-    n_sketch_cells,
-    " cells rather than the expected ",
-    target_sketch_cells,
-    "."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 9.3 — Create genuinely separate atlas sketch
-# ----------------------------------------------------------------------------
-
-atlas_sketch <- subset(
-  x = sketch_obj,
-  cells = sketch_cells
-)
-
-
-# ----------------------------------------------------------------------------
-# 9.4 — Validate separated object
-# ----------------------------------------------------------------------------
-
-if (
-  ncol(atlas_sketch) !=
-  target_sketch_cells
-) {
-  
-  stop(
-    "ERROR: atlas_sketch contains ",
-    ncol(atlas_sketch),
-    " cells rather than exactly ",
-    target_sketch_cells,
-    "."
-  )
-}
-
-if (
-  !setequal(
-    colnames(atlas_sketch),
-    sketch_cells
-  )
-) {
-  
-  stop(
-    "ERROR: atlas_sketch does not contain exactly the selected cells."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 9.5 — Confirm sample representation
-# ----------------------------------------------------------------------------
-
-atlas_sketch_sample_counts <- table(
-  atlas_sketch$GSM
-)
-
-cat(
-  "Atlas sketch cells:",
-  ncol(atlas_sketch),
-  "\n"
-)
-
-cat(
-  "Genes:",
-  nrow(atlas_sketch),
-  "\n"
-)
-
-cat(
-  "Samples represented:",
-  length(atlas_sketch_sample_counts),
-  "\n\n"
-)
-
-print(
-  atlas_sketch_sample_counts
-)
-
-cat("\n")
-
-if (
-  length(atlas_sketch_sample_counts) !=
-  dplyr::n_distinct(seurat_obj$GSM)
-) {
-  
-  stop(
-    "ERROR: Not all original samples are represented in the atlas sketch."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 9.6 — Confirm HVGs
-# ----------------------------------------------------------------------------
-
-atlas_sketch_hvg <- intersect(
-  
-  VariableFeatures(seurat_obj),
-  
-  rownames(atlas_sketch)
-  
-)
-
-if (
-  length(atlas_sketch_hvg) != 2000
-) {
-  
-  stop(
-    "ERROR: Expected all 2,000 HVGs to be present in atlas_sketch, ",
-    "but found ",
-    length(atlas_sketch_hvg),
-    "."
-  )
-}
-
-VariableFeatures(atlas_sketch) <-
-  atlas_sketch_hvg
-
-cat(
-  "HVGs available:",
-  length(atlas_sketch_hvg),
-  "\n"
-)
-
-cat(
-  "✓ All 2,000 HVGs retained\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 9.7 — Save atlas sketch
+# 8.3 — Save scaled checkpoint
 # ----------------------------------------------------------------------------
 
 saveRDS(
   atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch.rds"
+  "results/rds_objects/phase3_atlas_sketch_scaled.rds"
 )
 
 cat(
-  "✓ Genuine 20,000-cell atlas sketch created\n"
-)
-
-cat(
-  "✓ Saved to:\n",
-  "  results/rds_objects/phase3_atlas_sketch.rds\n\n"
-)
-
-cat(
-  "=== SECTION 9 COMPLETE ===\n\n"
+  "✓ Scaled atlas checkpoint saved:\n",
+  "  results/rds_objects/phase3_atlas_sketch_scaled.rds\n\n"
 )
 
 
 # ============================================================================
-# SECTION 10 — PCA ON THE 20,000-CELL ATLAS SKETCH
+# SECTION 9 — PCA
 # ============================================================================
 
-cat("=== SECTION 10: PCA — 50 PRINCIPAL COMPONENTS ===\n\n")
+cat("=== SECTION 9: PCA ===\n\n")
 
 atlas_sketch <- readRDS(
-  "results/rds_objects/phase3_atlas_sketch.rds"
+  "results/rds_objects/phase3_atlas_sketch_scaled.rds"
 )
 
 DefaultAssay(atlas_sketch) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 10.1 — Confirm PCA input
-# ----------------------------------------------------------------------------
-
-if (
-  ncol(atlas_sketch) !=
-  target_sketch_cells
-) {
-  
-  stop(
-    "ERROR: PCA input does not contain exactly 20,000 cells."
-  )
-}
 
 cat(
   "PCA input cells:",
@@ -1629,26 +1850,18 @@ cat(
 
 
 # ----------------------------------------------------------------------------
-# 10.2 — Run PCA
+# 9.1 — Run PCA
 # ----------------------------------------------------------------------------
 
 atlas_sketch <- RunPCA(
-  
   object = atlas_sketch,
-  
   assay = "RNA",
-  
   features = VariableFeatures(atlas_sketch),
-  
   npcs = 50,
-  
   verbose = TRUE
-  
 )
 
-cat(
-  "\n✓ PCA completed\n"
-)
+cat("\n✓ PCA completed\n")
 
 cat(
   "Principal components calculated:",
@@ -1663,7 +1876,7 @@ cat(
 
 
 # ----------------------------------------------------------------------------
-# 10.3 — Validate PCA
+# 9.2 — Validate PCA
 # ----------------------------------------------------------------------------
 
 pca_embeddings <- Embeddings(
@@ -1677,11 +1890,7 @@ if (
 ) {
   
   stop(
-    "ERROR: PCA embedding contains ",
-    nrow(pca_embeddings),
-    " cells rather than ",
-    target_sketch_cells,
-    "."
+    "ERROR: PCA embedding does not contain all 20,000 cells."
   )
 }
 
@@ -1690,9 +1899,7 @@ if (
 ) {
   
   stop(
-    "ERROR: Expected 50 PCs, but ",
-    ncol(pca_embeddings),
-    " were calculated."
+    "ERROR: Expected 50 PCs."
   )
 }
 
@@ -1707,27 +1914,21 @@ if (
   )
 }
 
-cat(
-  "✓ PCA contains exactly 20,000 cells and 50 PCs\n\n"
-)
+cat("✓ PCA contains exactly 20,000 cells and 50 PCs\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 10.4 — Generate elbow plot
+# 9.3 — Elbow plot
 # ----------------------------------------------------------------------------
 
 p_elbow <- ElbowPlot(
-  
   object = atlas_sketch,
-  
   reduction = "pca",
-  
   ndims = 50
-  
 ) +
   labs(
     title =
-      "PCA Elbow Plot — 20,000-Cell Atlas Sketch",
+      "PCA Elbow Plot — 20,000-Cell Global Atlas",
     x =
       "Principal Component",
     y =
@@ -1741,11 +1942,6 @@ p_elbow <- ElbowPlot(
       )
   )
 
-
-# ----------------------------------------------------------------------------
-# 10.5 — Save elbow plot
-# ----------------------------------------------------------------------------
-
 ggsave(
   "results/figures/phase3_pca_elbow_plot.png",
   p_elbow,
@@ -1754,14 +1950,11 @@ ggsave(
   dpi = 300
 )
 
-cat(
-  "✓ PCA elbow plot saved:\n",
-  "  results/figures/phase3_pca_elbow_plot.png\n\n"
-)
+cat("✓ PCA elbow plot saved\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 10.6 — Save PCA checkpoint
+# 9.4 — Save PCA checkpoint
 # ----------------------------------------------------------------------------
 
 saveRDS(
@@ -1769,37 +1962,23 @@ saveRDS(
   "results/rds_objects/phase3_atlas_sketch_pca50.rds"
 )
 
-cat(
-  "✓ PCA checkpoint saved:\n",
-  "  results/rds_objects/phase3_atlas_sketch_pca50.rds\n\n"
-)
-
-cat(
-  "=== SECTION 10 COMPLETE ===\n\n"
-)
+cat("✓ PCA checkpoint saved\n\n")
 
 
 # ============================================================================
-# SECTION 11 — SELECT THE FIRST 20 PRINCIPAL COMPONENTS
+# SECTION 10 — SELECT PCS FOR GLOBAL ATLAS
+# ============================================================================
+#
+# A fixed 1:20 PC range is used as a predefined starting point.
+#
+# The elbow plot is retained as a diagnostic rather than being used to
+# retrospectively tune the analysis after biological annotations are known.
+#
 # ============================================================================
 
-cat("=== SECTION 11: SELECTING THE FIRST 20 PCs ===\n\n")
+cat("=== SECTION 10: SELECTING PCS ===\n\n")
 
 selected_pcs <- 1:20
-
-cat(
-  "Selected principal components:",
-  paste(
-    selected_pcs,
-    collapse = ", "
-  ),
-  "\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 11.1 — Validate selected dimensions
-# ----------------------------------------------------------------------------
 
 available_pcs <- ncol(
   Embeddings(
@@ -1817,31 +1996,14 @@ if (
   )
 }
 
-if (
-  max(selected_pcs) > available_pcs
-) {
-  
-  stop(
-    "ERROR: Selected PC exceeds the number of calculated PCs."
-  )
-}
-
 cat(
-  "✓ First 20 PCs selected for downstream analysis\n"
-)
-
-cat(
-  "✓ PC range:",
-  min(selected_pcs),
-  "to",
-  max(selected_pcs),
+  "Selected PCs:",
+  paste(
+    selected_pcs,
+    collapse = ", "
+  ),
   "\n\n"
 )
-
-
-# ----------------------------------------------------------------------------
-# 11.2 — Save selected PC information
-# ----------------------------------------------------------------------------
 
 selected_pc_table <- tibble(
   PC = selected_pcs
@@ -1852,31 +2014,14 @@ write_csv(
   "results/tables/phase3_selected_pcs.csv"
 )
 
-cat(
-  "✓ Selected PC list saved:\n",
-  "  results/tables/phase3_selected_pcs.csv\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 11.3 — Save checkpoint
-# ----------------------------------------------------------------------------
-
-saveRDS(
-  atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch_pca50.rds"
-)
-
-cat(
-  "=== SECTION 11 COMPLETE ===\n\n"
-)
+cat("✓ PC selection saved\n\n")
 
 
 # ============================================================================
-# SECTION 12 — NEIGHBOUR GRAPH + CLUSTERING
+# SECTION 11 — NEIGHBOUR GRAPH + CLUSTERING
 # ============================================================================
 
-cat("=== SECTION 12: NEIGHBOUR GRAPH + CLUSTERING ===\n\n")
+cat("=== SECTION 11: NEIGHBOUR GRAPH + CLUSTERING ===\n\n")
 
 atlas_sketch <- readRDS(
   "results/rds_objects/phase3_atlas_sketch_pca50.rds"
@@ -1884,22 +2029,9 @@ atlas_sketch <- readRDS(
 
 DefaultAssay(atlas_sketch) <- "RNA"
 
-selected_pcs <- 1:20
-
 cat(
   "Cells:",
   ncol(atlas_sketch),
-  "\n"
-)
-
-cat(
-  "Available PCs:",
-  ncol(
-    Embeddings(
-      atlas_sketch,
-      reduction = "pca"
-    )
-  ),
   "\n"
 )
 
@@ -1914,64 +2046,32 @@ cat(
 
 
 # ----------------------------------------------------------------------------
-# 12.1 — Validate PCA dimensions
+# 11.1 — Construct neighbour graph
 # ----------------------------------------------------------------------------
-
-available_pcs <- ncol(
-  Embeddings(
-    atlas_sketch,
-    reduction = "pca"
-  )
-)
-
-if (
-  available_pcs < max(selected_pcs)
-) {
-  
-  stop(
-    "ERROR: Requested PCs exceed the number of available PCs."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 12.2 — Construct neighbour graph
-# ----------------------------------------------------------------------------
-
-cat(
-  "Constructing neighbour graph...\n\n"
-)
 
 atlas_sketch <- FindNeighbors(
-  
   object = atlas_sketch,
-  
   reduction = "pca",
-  
   dims = selected_pcs,
-  
   verbose = TRUE
-  
 )
 
-cat(
-  "\n✓ Neighbour graph constructed\n\n"
-)
+cat("\n✓ Neighbour graph constructed\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 12.3 — Validate neighbour graph
+# 11.2 — Validate graph
 # ----------------------------------------------------------------------------
 
 graph_names <- names(
   atlas_sketch@graphs
 )
 
-cat(
-  "Graphs currently stored in object:\n\n"
-)
+cat("Graphs stored:\n\n")
 
-print(graph_names)
+print(
+  graph_names
+)
 
 cat("\n")
 
@@ -1984,38 +2084,26 @@ if (
   )
 }
 
-cat(
-  "✓ Neighbour graph successfully detected\n\n"
-)
+cat("✓ Neighbour graph detected\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 12.4 — Cluster cells
+# 11.3 — Cluster
 # ----------------------------------------------------------------------------
-
-cat(
-  "Clustering cells at resolution 0.5...\n\n"
-)
 
 set.seed(12345)
 
 atlas_sketch <- FindClusters(
-  
   object = atlas_sketch,
-  
   resolution = 0.5,
-  
   verbose = TRUE
-  
 )
 
-cat(
-  "\n✓ Clustering completed\n\n"
-)
+cat("\n✓ Clustering completed\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 12.5 — Validate cluster assignment
+# 11.4 — Validate clusters
 # ----------------------------------------------------------------------------
 
 if (
@@ -2024,37 +2112,13 @@ if (
 ) {
   
   stop(
-    "ERROR: 'seurat_clusters' was not created."
+    "ERROR: seurat_clusters was not created."
   )
 }
 
 cluster_table <- table(
   atlas_sketch$seurat_clusters
 )
-
-cat(
-  "Number of clusters:",
-  length(cluster_table),
-  "\n\n"
-)
-
-cat(
-  "Cells per cluster:\n\n"
-)
-
-print(cluster_table)
-
-cat("\n")
-
-if (
-  sum(cluster_table) !=
-  ncol(atlas_sketch)
-) {
-  
-  stop(
-    "ERROR: Cluster assignments do not account for all cells."
-  )
-}
 
 if (
   any(
@@ -2069,23 +2133,34 @@ if (
   )
 }
 
+if (
+  sum(cluster_table) !=
+  ncol(atlas_sketch)
+) {
+  
+  stop(
+    "ERROR: Cluster assignments do not account for all cells."
+  )
+}
+
 cat(
-  "✓ Every atlas cell has a cluster assignment\n\n"
+  "Number of clusters:",
+  length(cluster_table),
+  "\n\n"
 )
 
+print(
+  cluster_table
+)
 
-# ----------------------------------------------------------------------------
-# 12.6 — Save cluster-size table
-# ----------------------------------------------------------------------------
+cat("\n")
 
 cluster_table_df <- tibble(
-  
   Cluster =
     names(cluster_table),
   
   Cells =
     as.integer(cluster_table)
-  
 )
 
 write_csv(
@@ -2093,13 +2168,11 @@ write_csv(
   "results/tables/phase3_global_cluster_sizes.csv"
 )
 
-cat(
-  "✓ Cluster-size table saved\n\n"
-)
+cat("✓ Cluster-size table saved\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 12.7 — Save clustering checkpoint
+# 11.5 — Save clustered checkpoint
 # ----------------------------------------------------------------------------
 
 saveRDS(
@@ -2107,21 +2180,14 @@ saveRDS(
   "results/rds_objects/phase3_atlas_sketch_clustered.rds"
 )
 
-cat(
-  "✓ Clustered atlas sketch checkpoint saved:\n",
-  "  results/rds_objects/phase3_atlas_sketch_clustered.rds\n\n"
-)
-
-cat(
-  "=== SECTION 12 COMPLETE ===\n\n"
-)
+cat("✓ Clustered atlas checkpoint saved\n\n")
 
 
 # ============================================================================
-# SECTION 13 — UMAP
+# SECTION 12 — UMAP
 # ============================================================================
 
-cat("=== SECTION 13: UMAP ===\n\n")
+cat("=== SECTION 12: UMAP ===\n\n")
 
 atlas_sketch <- readRDS(
   "results/rds_objects/phase3_atlas_sketch_clustered.rds"
@@ -2129,70 +2195,25 @@ atlas_sketch <- readRDS(
 
 DefaultAssay(atlas_sketch) <- "RNA"
 
-selected_pcs <- 1:20
-
-cat(
-  "UMAP input cells:",
-  ncol(atlas_sketch),
-  "\n"
-)
-
-cat(
-  "UMAP input dimensions:",
-  paste(
-    selected_pcs,
-    collapse = ", "
-  ),
-  "\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 13.1 — Run UMAP
-# ----------------------------------------------------------------------------
-
-cat(
-  "Running UMAP...\n\n"
-)
-
 set.seed(12345)
 
 atlas_sketch <- RunUMAP(
-  
   object = atlas_sketch,
-  
   reduction = "pca",
-  
   dims = selected_pcs,
-  
   verbose = TRUE
-  
 )
 
-cat(
-  "\n✓ UMAP completed\n\n"
-)
+cat("\n✓ UMAP completed\n\n")
 
 
 # ----------------------------------------------------------------------------
-# 13.2 — Validate UMAP
+# 12.1 — Validate UMAP
 # ----------------------------------------------------------------------------
 
 umap_embeddings <- Embeddings(
   atlas_sketch,
   reduction = "umap"
-)
-
-cat(
-  "UMAP dimensions:",
-  ncol(umap_embeddings),
-  "\n"
-)
-
-cat(
-  "UMAP cells:",
-  nrow(umap_embeddings),
-  "\n\n"
 )
 
 if (
@@ -2210,7 +2231,7 @@ if (
 ) {
   
   stop(
-    "ERROR: UMAP should contain exactly two dimensions."
+    "ERROR: UMAP should contain two dimensions."
   )
 }
 
@@ -2221,65 +2242,26 @@ if (
 ) {
   
   stop(
-    "ERROR: Non-finite values detected in UMAP embeddings."
+    "ERROR: Non-finite UMAP values detected."
   )
 }
 
-cat(
-  "✓ UMAP contains exactly 20,000 cells and 2 dimensions\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 13.3 — Save UMAP checkpoint
-# ----------------------------------------------------------------------------
-
-saveRDS(
-  atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch_umap.rds"
-)
-
-cat(
-  "✓ UMAP checkpoint saved:\n",
-  "  results/rds_objects/phase3_atlas_sketch_umap.rds\n\n"
-)
-
-cat(
-  "=== SECTION 13 COMPLETE ===\n\n"
-)
+cat("✓ UMAP contains 20,000 cells and 2 dimensions\n\n")
 
 
 # ============================================================================
-# SECTION 14 — GLOBAL UMAP BY CLUSTER
+# SECTION 13 — UMAP BY CLUSTER
 # ============================================================================
 
-cat("=== SECTION 14: GLOBAL UMAP BY CLUSTER ===\n\n")
-
-atlas_sketch <- readRDS(
-  "results/rds_objects/phase3_atlas_sketch_umap.rds"
-)
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 14.1 — Generate cluster UMAP
-# ----------------------------------------------------------------------------
+cat("=== SECTION 13: UMAP BY CLUSTER ===\n\n")
 
 p_global_cluster <- DimPlot(
-  
   object = atlas_sketch,
-  
   reduction = "umap",
-  
   group.by = "seurat_clusters",
-  
   label = TRUE,
-  
   repel = TRUE,
-  
   raster = TRUE
-  
 ) +
   ggtitle(
     "Global UMAP — Atlas Sketch by Cluster"
@@ -2293,15 +2275,6 @@ p_global_cluster <- DimPlot(
       )
   )
 
-print(
-  p_global_cluster
-)
-
-
-# ----------------------------------------------------------------------------
-# 14.2 — Save plot
-# ----------------------------------------------------------------------------
-
 ggsave(
   "results/figures/phase3_global_umap_by_cluster.png",
   p_global_cluster,
@@ -2310,66 +2283,33 @@ ggsave(
   dpi = 300
 )
 
-cat(
-  "\n✓ Global cluster UMAP saved:\n",
-  "  results/figures/phase3_global_umap_by_cluster.png\n\n"
-)
-
-cat(
-  "=== SECTION 14 COMPLETE ===\n\n"
-)
+cat("✓ Cluster UMAP saved\n\n")
 
 
 # ============================================================================
-# SECTION 15 — UMAP BY CLINICAL STATE
+# SECTION 14 — UMAP BY CLINICAL STATE
 # ============================================================================
 
-cat("=== SECTION 15: UMAP BY CLINICAL STATE ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 15.1 — Validate clinical-state metadata
-# ----------------------------------------------------------------------------
-
-if (
-  !"Phase" %in%
-  colnames(atlas_sketch@meta.data)
-) {
-  
-  stop(
-    "ERROR: 'Phase' metadata column is missing."
-  )
-}
+cat("=== SECTION 14: UMAP BY CLINICAL STATE ===\n\n")
 
 clinical_states <- unique(
   atlas_sketch$Phase
 )
 
-cat(
-  "Clinical states represented:\n\n"
-)
-
-print(
-  sort(clinical_states)
-)
-
-cat("\n")
-
-
-# ----------------------------------------------------------------------------
-# 15.2 — Generate clinical-state UMAP
-# ----------------------------------------------------------------------------
+if (
+  length(clinical_states) != 5
+) {
+  
+  stop(
+    "ERROR: Expected all 5 clinical states in atlas sketch."
+  )
+}
 
 p_umap_phase <- DimPlot(
-  
   object = atlas_sketch,
-  
   reduction = "umap",
-  
   group.by = "Phase",
-  
   raster = TRUE
-  
 ) +
   ggtitle(
     "Global UMAP — Atlas Sketch by Clinical State"
@@ -2383,15 +2323,6 @@ p_umap_phase <- DimPlot(
       )
   )
 
-print(
-  p_umap_phase
-)
-
-
-# ----------------------------------------------------------------------------
-# 15.3 — Save plot
-# ----------------------------------------------------------------------------
-
 ggsave(
   "results/figures/phase3_global_umap_by_clinical_state.png",
   p_umap_phase,
@@ -2400,45 +2331,17 @@ ggsave(
   dpi = 300
 )
 
-cat(
-  "\n✓ Clinical-state UMAP saved:\n",
-  "  results/figures/phase3_global_umap_by_clinical_state.png\n\n"
-)
-
-cat(
-  "=== SECTION 15 COMPLETE ===\n\n"
-)
+cat("✓ Clinical-state UMAP saved\n\n")
 
 
 # ============================================================================
-# SECTION 16 — UMAP BY DONOR
+# SECTION 15 — UMAP BY DONOR
 # ============================================================================
 
-cat("=== SECTION 16: UMAP BY DONOR ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 16.1 — Validate donor metadata
-# ----------------------------------------------------------------------------
-
-if (
-  !"Donor" %in%
-  colnames(atlas_sketch@meta.data)
-) {
-  
-  stop(
-    "ERROR: 'Donor' metadata column is missing."
-  )
-}
+cat("=== SECTION 15: UMAP BY DONOR ===\n\n")
 
 donors <- unique(
   atlas_sketch$Donor
-)
-
-cat(
-  "Number of donors represented:",
-  length(donors),
-  "\n\n"
 )
 
 if (
@@ -2446,27 +2349,15 @@ if (
 ) {
   
   stop(
-    "ERROR: Expected 23 donors, but found ",
-    length(donors),
-    "."
+    "ERROR: Expected 23 donors in atlas sketch."
   )
 }
 
-
-# ----------------------------------------------------------------------------
-# 16.2 — Generate donor UMAP
-# ----------------------------------------------------------------------------
-
 p_umap_donor <- DimPlot(
-  
   object = atlas_sketch,
-  
   reduction = "umap",
-  
   group.by = "Donor",
-  
   raster = TRUE
-  
 ) +
   ggtitle(
     "Global UMAP — Atlas Sketch by Donor"
@@ -2478,18 +2369,10 @@ p_umap_donor <- DimPlot(
         hjust = 0.5,
         face = "bold"
       ),
+    
     legend.position =
       "right"
   )
-
-print(
-  p_umap_donor
-)
-
-
-# ----------------------------------------------------------------------------
-# 16.3 — Save donor UMAP
-# ----------------------------------------------------------------------------
 
 ggsave(
   "results/figures/phase3_global_umap_by_donor.png",
@@ -2499,15 +2382,14 @@ ggsave(
   dpi = 300
 )
 
-cat(
-  "\n✓ Donor UMAP saved:\n",
-  "  results/figures/phase3_global_umap_by_donor.png\n\n"
-)
+cat("✓ Donor UMAP saved\n\n")
 
 
-# ----------------------------------------------------------------------------
-# 16.4 — Save final Sections 1–16 checkpoint
-# ----------------------------------------------------------------------------
+# ============================================================================
+# SECTION 16 — FINAL ATLAS CHECKPOINT
+# ============================================================================
+
+cat("=== SECTION 16: FINAL ATLAS CHECKPOINT ===\n\n")
 
 saveRDS(
   atlas_sketch,
@@ -2515,13 +2397,13 @@ saveRDS(
 )
 
 cat(
-  "✓ Final Sections 1–16 atlas checkpoint saved:\n",
+  "✓ Final atlas checkpoint saved:\n",
   "  results/rds_objects/phase3_atlas_sketch_umap_clustered.rds\n\n"
 )
 
 
 # ============================================================================
-# FINAL CHECKPOINT — SECTIONS 1–16
+# FINAL VALIDATION
 # ============================================================================
 
 cat(
@@ -2529,33 +2411,55 @@ cat(
 )
 
 cat(
-  "✓ PHASE 3 SCRIPT 01 — SECTIONS 1–16 COMPLETE\n"
+  "✓ PHASE 3 SCRIPT 01 — COMPLETE\n"
 )
 
 cat(
   "============================================================\n\n"
 )
 
+cat("Full dataset:\n")
+
 cat(
-  "Full dataset cells:",
+  "  Cells:",
   ncol(seurat_obj),
   "\n"
 )
 
 cat(
-  "Full dataset genes:",
+  "  Genes:",
   nrow(seurat_obj),
   "\n"
 )
 
 cat(
-  "Atlas sketch cells:",
+  "  Samples:",
+  dplyr::n_distinct(seurat_obj$GSM),
+  "\n"
+)
+
+cat(
+  "  Donors:",
+  dplyr::n_distinct(seurat_obj$Donor),
+  "\n\n"
+)
+
+cat("Atlas sketch:\n")
+
+cat(
+  "  Cells:",
   ncol(atlas_sketch),
   "\n"
 )
 
 cat(
-  "HVGs:",
+  "  Genes:",
+  nrow(atlas_sketch),
+  "\n"
+)
+
+cat(
+  "  HVGs:",
   length(
     VariableFeatures(atlas_sketch)
   ),
@@ -2563,7 +2467,25 @@ cat(
 )
 
 cat(
-  "Clusters:",
+  "  Samples:",
+  dplyr::n_distinct(atlas_sketch$GSM),
+  "\n"
+)
+
+cat(
+  "  Donors:",
+  dplyr::n_distinct(atlas_sketch$Donor),
+  "\n"
+)
+
+cat(
+  "  Clinical states:",
+  dplyr::n_distinct(atlas_sketch$Phase),
+  "\n"
+)
+
+cat(
+  "  Clusters:",
   length(
     unique(
       atlas_sketch$seurat_clusters
@@ -2573,62 +2495,53 @@ cat(
 )
 
 cat(
-  "UMAP dimensions:",
+  "  UMAP dimensions:",
   ncol(
     Embeddings(
       atlas_sketch,
       "umap"
     )
   ),
-  "\n"
-)
-
-cat(
-  "Clinical states:",
-  length(
-    unique(
-      atlas_sketch$Phase
-    )
-  ),
-  "\n"
-)
-
-cat(
-  "Donors:",
-  length(
-    unique(
-      atlas_sketch$Donor
-    )
-  ),
   "\n\n"
 )
 
-cat(
-  "Completed:\n",
-  "  ✓ Environment setup\n",
-  "  ✓ QC-filtered singlet object loaded\n",
-  "  ✓ Metadata validated\n",
-  "  ✓ Singlet retention validated\n",
-  "  ✓ Log-normalization completed\n",
-  "  ✓ 2,000 HVGs identified using VST\n",
-  "  ✓ Exactly 20,000-cell leverage-score sketch constructed\n",
-  "  ✓ All sample layers represented\n",
-  "  ✓ Sketch representation validated\n",
-  "  ✓ 20,000-cell sketch scaled\n",
-  "  ✓ Separate atlas sketch created\n",
-  "  ✓ PCA calculated to 50 components\n",
-  "  ✓ PCs 1–20 selected\n",
-  "  ✓ Neighbour graph constructed\n",
-  "  ✓ Global clustering completed\n",
-  "  ✓ UMAP calculated using PCs 1–20\n",
-  "  ✓ Global UMAP by cluster generated\n",
-  "  ✓ UMAP by clinical state generated\n",
-  "  ✓ UMAP by donor generated\n",
-  "  ✓ Final Sections 1–16 checkpoint saved\n\n"
-)
+cat("Sketch design:\n")
 
 cat(
-  "Final checkpoint:\n",
+  "  ✓ 20,000-cell target\n",
+  "  ✓ All 23 samples represented\n",
+  "  ✓ All 23 donors represented\n",
+  "  ✓ Approximately proportional sample allocation\n",
+  "  ✓ Minimum 20-cell representation safeguard\n",
+  "  ✓ Within-sample leverage-score-weighted sampling\n",
+  "  ✓ Sampling without replacement\n",
+  "  ✓ Full dataset retained unchanged\n\n"
+)
+
+cat("Expression handling:\n")
+
+cat(
+  "  ✓ Supplied processed log-CP10K expression retained\n",
+  "  ✓ No additional LogNormalize step\n",
+  "  ✓ No raw UMI counts reconstructed\n\n"
+)
+
+cat("Atlas construction:\n")
+
+cat(
+  "  ✓ 2,000 consensus HVGs identified\n",
+  "  ✓ Sketch scaled\n",
+  "  ✓ 50 PCs calculated\n",
+  "  ✓ PCs 1–20 used for global graph\n",
+  "  ✓ Neighbour graph constructed\n",
+  "  ✓ Clustering completed\n",
+  "  ✓ UMAP completed\n",
+  "  ✓ Cluster/state/donor diagnostics generated\n\n"
+)
+
+cat("Final checkpoint:\n")
+
+cat(
   "  results/rds_objects/phase3_atlas_sketch_umap_clustered.rds\n\n"
 )
 
@@ -2639,4 +2552,3 @@ cat(
 cat(
   "============================================================\n"
 )
-
