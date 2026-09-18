@@ -1,0 +1,14 @@
+Metric,Value
+Input cells,106592
+Input genes,24452
+Cells below 200 detected genes,0
+Post-QC cells,106592
+Percent retained,100
+Samples,23
+Donors,23
+Clinical states,5
+Smallest sample before QC,66
+High-complexity cells flagged,5
+Mitochondrial UMI percentage,Not available
+Raw UMI counts,Not available
+Automatic doublet removal,Not performed

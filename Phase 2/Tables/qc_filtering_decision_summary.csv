@@ -1,0 +1,3 @@
+Criterion,Cells,Percent_of_input
+Below 200 detected genes,0,0
+Passing conservative QC,106592,100

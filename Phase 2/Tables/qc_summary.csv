@@ -1,0 +1,13 @@
+metric,value
+Cells before QC,106592
+Genes in input assay,24452
+Cells below 200 detected genes,0
+Cells after conservative QC,106592
+Percent retained,100
+Minimum detected genes,200
+Samples,23
+Donors,23
+Clinical states,5
+Raw UMI counts available,FALSE
+Conventional mitochondrial percentage available,FALSE
+Automatic doublet removal performed,FALSE
