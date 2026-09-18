@@ -1,894 +1,338 @@
-# ============================================================================
-# PHASE 3 — CLUSTER MARKERS + CELL-TYPE ANNOTATION
-# ============================================================================
+# ==============================================================================
+# HBV scRNA-seq PROJECT
+# PHASE 3 — GLOBAL ATLAS CONSTRUCTION
+# SCRIPT 02 — CLUSTER MARKERS, ANNOTATION EVIDENCE & FINAL CELL-TYPE LABELS
+# ==============================================================================
 #
-# Script: phase_03_02_cluster_markers_annotation.R
-#
-# Sections:
-#   17 — Cluster × clinical state
-#   18 — Cluster × donor dominance
-#   19 — Cluster × sample dominance
-#   20 — Cluster marker discovery
-#   21 — Canonical lineage markers
-#   22 — Canonical marker heatmap
-#   23 — Multi-method annotation
-#   24 — Final cell-type annotation of the sketch
-#
-# Input checkpoint:
+# INPUT:
 #   results/rds_objects/phase3_atlas_sketch_umap_clustered.rds
 #
-# Final output:
+# OUTPUT:
+#   results/rds_objects/phase3_atlas_sketch_annotation_evidence.rds
 #   results/rds_objects/phase3_atlas_sketch_final_annotation.rds
 #
-# Biological framing:
-#   Clinical states are treated as cohort-level comparisons rather than a
-#   presumed linear disease trajectory.
+# PURPOSE:
+#   1. Characterize cluster composition across clinical states.
+#   2. Assess donor/sample representation of every cluster.
+#   3. Identify descriptive cluster marker genes.
+#   4. Compare clusters against canonical lineage marker programs.
+#   5. Generate marker-based module-score evidence.
+#   6. Generate reference-based SingleR/Monaco evidence.
+#   7. Save a complete evidence checkpoint.
+#   8. Apply FINAL cell-type labels only after explicit manual adjudication.
 #
 # IMPORTANT:
-#   The atlas contains 20,000 representative sketch cells.
-#   Annotation is performed at cluster level and then propagated to cells.
-#   Module scores, marker overlap, and SingleR are evidence streams rather
-#   than automatic biological truth.
+#   - This script does NOT perform normalization.
+#   - This script does NOT perform batch correction.
+#   - This script does NOT perform filtering.
+#   - Cluster-marker p-values are DESCRIPTIVE and are not donor-level
+#     biological inference.
+#   - The atlas currently contains 20 clusters. Cluster count is detected
+#     dynamically rather than hard-coded.
+#   - Final labels must be explicitly supplied for ALL clusters.
 #
-# ============================================================================
+# ==============================================================================
 
 
-# ============================================================================
-# ENVIRONMENT
-# ============================================================================
+# ==============================================================================
+# 1. SETUP
+# ==============================================================================
 
-cat("============================================================\n")
-cat("PHASE 3 — CLUSTER MARKERS + CELL-TYPE ANNOTATION\n")
-cat("============================================================\n\n")
+rm(list = ls())
 
-library(Seurat)
-library(SeuratObject)
-library(tidyverse)
-library(here)
-library(Matrix)
-
-setwd(here())
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(SeuratObject)
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(ggplot2)
+  library(pheatmap)
+  library(patchwork)
+  library(SingleR)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(celldex)
+})
 
 set.seed(12345)
 
-cat("✓ Environment initialized\n\n")
-
-
-# ============================================================================
-# LOAD ATLAS CHECKPOINT
-# ============================================================================
-
-atlas_sketch <- readRDS(
+input_file <-
   "results/rds_objects/phase3_atlas_sketch_umap_clustered.rds"
+
+evidence_output_file <-
+  "results/rds_objects/phase3_atlas_sketch_annotation_evidence.rds"
+
+final_output_file <-
+  "results/rds_objects/phase3_atlas_sketch_final_annotation.rds"
+
+dir.create(
+  "results/rds_objects",
+  recursive = TRUE,
+  showWarnings = FALSE
 )
+
+dir.create(
+  "results/phase3_annotation",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# ==============================================================================
+# 2. LOAD ATLAS
+# ==============================================================================
+
+message("Loading Phase 3 atlas...")
+
+atlas_sketch <- readRDS(input_file)
+
+if (!inherits(atlas_sketch, "Seurat")) {
+  stop("Input object is not a Seurat object.")
+}
+
+if (!"RNA" %in% names(atlas_sketch@assays)) {
+  stop("RNA assay not found.")
+}
 
 DefaultAssay(atlas_sketch) <- "RNA"
 
-cat(
-  "Atlas cells:",
-  ncol(atlas_sketch),
-  "\n"
-)
 
-cat(
-  "Atlas genes:",
-  nrow(atlas_sketch),
-  "\n"
-)
+# ==============================================================================
+# 3. BASIC VALIDATION
+# ==============================================================================
 
-cat(
-  "Clusters:",
-  length(unique(atlas_sketch$seurat_clusters)),
-  "\n\n"
-)
+message("Validating atlas structure...")
 
-if (ncol(atlas_sketch) != 20000) {
-  
-  stop(
-    "ERROR: Expected 20,000 atlas sketch cells."
-  )
+if (!"seurat_clusters" %in% colnames(atlas_sketch@meta.data)) {
+  stop("seurat_clusters metadata is missing.")
 }
 
-n_atlas_clusters <- length(
+cluster_ids <- sort(
   unique(
-    as.character(
-      atlas_sketch$seurat_clusters
-    )
+    as.character(atlas_sketch$seurat_clusters)
   )
+)
+
+n_atlas_clusters <- length(cluster_ids)
+
+message(
+  "Detected ",
+  n_atlas_clusters,
+  " atlas clusters: ",
+  paste(cluster_ids, collapse = ", ")
 )
 
 if (n_atlas_clusters < 2) {
-  stop(
-    "ERROR: Atlas clustering produced fewer than 2 clusters."
+  stop("Fewer than two clusters detected.")
+}
+
+if (ncol(atlas_sketch) != 20000) {
+  warning(
+    "Atlas contains ",
+    ncol(atlas_sketch),
+    " cells rather than exactly 20,000."
   )
 }
 
-cat(
-  "Atlas clustering produced ",
-  n_atlas_clusters,
-  " clusters.\n",
-  sep = ""
+message(
+  "Genes: ", nrow(atlas_sketch),
+  "\nCells: ", ncol(atlas_sketch),
+  "\nClusters: ", n_atlas_clusters
 )
 
 
-# ============================================================================
-# SECTION 17 — CLUSTER × CLINICAL STATE
-# ============================================================================
-#
-# Purpose:
-#   Assess the distribution of the 17 global atlas clusters across the five
-#   HBV clinical states.
-#
-# Outputs:
-#   1. Raw cell-count table
-#   2. Within-clinical-state cluster proportion table
-#   3. Within-cluster clinical-state composition table
-#   4. Cluster × clinical-state heatmap
-#
-# ============================================================================
-
-cat("=== SECTION 17: CLUSTER × CLINICAL STATE ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 17.1 — Validate metadata
-# ----------------------------------------------------------------------------
-
-required_columns <- c(
-  "seurat_clusters",
-  "Phase"
-)
-
-missing_columns <- setdiff(
-  required_columns,
-  colnames(atlas_sketch@meta.data)
-)
-
-if (length(missing_columns) > 0) {
-  
-  stop(
-    "ERROR: Required metadata columns are missing: ",
-    paste(
-      missing_columns,
-      collapse = ", "
-    )
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 17.2 — Raw cluster × clinical-state counts
-# ----------------------------------------------------------------------------
-
-cluster_phase_counts <-
-  atlas_sketch@meta.data %>%
-  dplyr::count(
-    seurat_clusters,
-    Phase,
-    name = "Cells"
-  ) %>%
-  dplyr::arrange(
-    as.numeric(as.character(seurat_clusters)),
-    Phase
-  )
-
-cat(
-  "Cluster × clinical-state cell counts:\n\n"
-)
-
-print(
-  cluster_phase_counts
-)
-
-
-# ----------------------------------------------------------------------------
-# 17.3 — Cluster proportions within each clinical state
-# ----------------------------------------------------------------------------
-
-cluster_phase_proportions <-
-  cluster_phase_counts %>%
-  group_by(Phase) %>%
-  mutate(
-    Proportion =
-      Cells / sum(Cells),
-    Percent =
-      100 * Proportion
-  ) %>%
-  ungroup()
-
-
-# ----------------------------------------------------------------------------
-# 17.4 — Clinical-state composition within each cluster
-# ----------------------------------------------------------------------------
-
-cluster_phase_composition <-
-  cluster_phase_counts %>%
-  group_by(seurat_clusters) %>%
-  mutate(
-    Proportion =
-      Cells / sum(Cells),
-    Percent =
-      100 * Proportion
-  ) %>%
-  ungroup()
-
-
-# ----------------------------------------------------------------------------
-# 17.5 — Save tables
-# ----------------------------------------------------------------------------
-
-write_csv(
-  cluster_phase_counts,
-  "results/tables/phase3_cluster_x_clinical_state_counts.csv"
-)
-
-write_csv(
-  cluster_phase_proportions,
-  "results/tables/phase3_cluster_x_clinical_state_proportions.csv"
-)
-
-write_csv(
-  cluster_phase_composition,
-  "results/tables/phase3_cluster_x_clinical_state_composition.csv"
-)
-
-cat(
-  "\n✓ Cluster × clinical-state tables saved\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 17.6 — Heatmap
-# ----------------------------------------------------------------------------
-
-cluster_phase_long <-
-  cluster_phase_composition %>%
-  mutate(
-    Cluster = factor(
-      seurat_clusters,
-      levels = sort(
-        unique(seurat_clusters)
-      )
-    )
-  )
-
-p_cluster_phase <-
-  ggplot(
-    cluster_phase_long,
-    aes(
-      x = Phase,
-      y = Cluster,
-      fill = Percent
-    )
-  ) +
-  geom_tile(
-    color = "white"
-  ) +
-  geom_text(
-    aes(
-      label = sprintf(
-        "%.1f",
-        Percent
-      )
-    ),
-    size = 3
-  ) +
-  labs(
-    title =
-      "Global Atlas — Cluster Composition by Clinical State",
-    x =
-      "Clinical State",
-    y =
-      "Cluster",
-    fill =
-      "Percent"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title =
-      element_text(
-        hjust = 0.5
-      )
-  )
-
-ggsave(
-  "results/figures/phase3_cluster_x_clinical_state_heatmap.png",
-  p_cluster_phase,
-  width = 9,
-  height = 8,
-  dpi = 300
-)
-
-cat(
-  "✓ Cluster × clinical-state heatmap saved\n\n"
-)
-
-cat(
-  "=== SECTION 17 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 18 — CLUSTER × DONOR DOMINANCE
-# ============================================================================
-#
-# Purpose:
-#   Determine whether clusters are disproportionately contributed by one
-#   or a small number of donors.
-#
-# Outputs:
-#   1. Cluster × donor counts
-#   2. Cluster × donor composition
-#   3. Dominant donor summary
-#   4. Cluster × donor heatmap
-#   5. Dominant donor plot
-#
-# ============================================================================
-
-cat("=== SECTION 18: CLUSTER × DONOR DOMINANCE ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 18.1 — Validate metadata
-# ----------------------------------------------------------------------------
-
-required_columns <- c(
-  "seurat_clusters",
-  "Donor"
-)
-
-missing_columns <- setdiff(
-  required_columns,
-  colnames(atlas_sketch@meta.data)
-)
-
-if (length(missing_columns) > 0) {
-  
-  stop(
-    "ERROR: Required metadata columns are missing: ",
-    paste(
-      missing_columns,
-      collapse = ", "
-    )
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 18.2 — Cluster × donor counts
-# ----------------------------------------------------------------------------
-
-cluster_donor_counts <-
-  atlas_sketch@meta.data %>%
-  dplyr::count(
-    seurat_clusters,
-    Donor,
-    name = "Cells"
-  ) %>%
-  dplyr::arrange(
-    as.numeric(as.character(seurat_clusters)),
-    desc(Cells)
-  )
-
-
-# ----------------------------------------------------------------------------
-# 18.3 — Donor composition within each cluster
-# ----------------------------------------------------------------------------
-
-cluster_donor_composition <-
-  cluster_donor_counts %>%
-  group_by(seurat_clusters) %>%
-  mutate(
-    Cluster_Total =
-      sum(Cells),
-    Donor_Proportion =
-      Cells / Cluster_Total,
-    Donor_Percent =
-      100 * Donor_Proportion
-  ) %>%
-  ungroup()
-
-
-# ----------------------------------------------------------------------------
-# 18.4 — Dominant donor
-# ----------------------------------------------------------------------------
-
-cluster_donor_dominance <-
-  cluster_donor_composition %>%
-  dplyr::group_by(seurat_clusters) %>%
-  dplyr::slice_max(
-    order_by = Cells,
-    n = 1,
-    with_ties = FALSE
-  ) %>%
-  dplyr::ungroup() %>%
-  dplyr::select(
-    seurat_clusters,
-    Dominant_Donor = Donor,
-    Dominant_Donor_Cells = Cells,
-    Dominant_Donor_Percent = Donor_Percent
-  )
-
-# ----------------------------------------------------------------------------
-# 18.5 — Cluster-level donor summary
-# ----------------------------------------------------------------------------
-
-cluster_donor_summary <-
-  cluster_donor_composition %>%
-  group_by(seurat_clusters) %>%
-  summarise(
-    Cluster_Cells =
-      sum(Cells),
-    Donors_Represented =
-      n_distinct(Donor),
-    .groups = "drop"
-  ) %>%
-  left_join(
-    cluster_donor_dominance,
-    by = "seurat_clusters"
-  ) %>%
-  arrange(
-    as.numeric(
-      as.character(seurat_clusters)
-    )
-  )
-
-cat(
-  "Dominant donor by cluster:\n\n"
-)
-
-print(
-  cluster_donor_summary,
-  n = Inf
-)
-
-
-# ----------------------------------------------------------------------------
-# 18.6 — Save tables
-# ----------------------------------------------------------------------------
-
-write_csv(
-  cluster_donor_counts,
-  "results/tables/phase3_cluster_x_donor_counts.csv"
-)
-
-write_csv(
-  cluster_donor_composition,
-  "results/tables/phase3_cluster_x_donor_composition.csv"
-)
-
-write_csv(
-  cluster_donor_summary,
-  "results/tables/phase3_cluster_donor_dominance.csv"
-)
-
-cat(
-  "\n✓ Cluster × donor tables saved\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 18.7 — Cluster × donor heatmap
-# ----------------------------------------------------------------------------
-
-p_cluster_donor <-
-  ggplot(
-    cluster_donor_composition,
-    aes(
-      x = Donor,
-      y = factor(
-        seurat_clusters,
-        levels = sort(
-          unique(seurat_clusters)
-        )
-      ),
-      fill = Donor_Percent
-    )
-  ) +
-  geom_tile(
-    color = "white"
-  ) +
-  labs(
-    title =
-      "Global Atlas — Cluster Composition by Donor",
-    x =
-      "Donor",
-    y =
-      "Cluster",
-    fill =
-      "Percent"
-  ) +
-  theme_bw() +
-  theme(
-    axis.text.x =
-      element_text(
-        angle = 60,
-        hjust = 1,
-        size = 7
-      ),
-    plot.title =
-      element_text(
-        hjust = 0.5
-      )
-  )
-
-ggsave(
-  "results/figures/phase3_cluster_x_donor_heatmap.png",
-  p_cluster_donor,
-  width = 14,
-  height = 8,
-  dpi = 300
-)
-
-cat(
-  "✓ Cluster × donor heatmap saved\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 18.8 — Dominant donor plot
-# ----------------------------------------------------------------------------
-
-p_donor_dominance <-
-  ggplot(
-    cluster_donor_summary,
-    aes(
-      x = factor(
-        seurat_clusters,
-        levels = sort(
-          unique(seurat_clusters)
-        )
-      ),
-      y = Dominant_Donor_Percent
-    )
-  ) +
-  geom_col() +
-  geom_text(
-    aes(
-      label = Dominant_Donor
-    ),
-    vjust = -0.3,
-    size = 3
-  ) +
-  labs(
-    title =
-      "Global Atlas — Dominant Donor Contribution by Cluster",
-    x =
-      "Cluster",
-    y =
-      "Cells from Dominant Donor (%)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title =
-      element_text(
-        hjust = 0.5
-      )
-  )
-
-ggsave(
-  "results/figures/phase3_cluster_donor_dominance.png",
-  p_donor_dominance,
-  width = 11,
-  height = 7,
-  dpi = 300
-)
-
-cat(
-  "✓ Dominant-donor plot saved\n\n"
-)
-
-cat(
-  "=== SECTION 18 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 19 — CLUSTER × SAMPLE DOMINANCE
-# ============================================================================
-#
-# Purpose:
-#   Evaluate whether individual GSM samples disproportionately contribute
-#   particular global atlas clusters.
-#
-# ============================================================================
-
-cat("=== SECTION 19: CLUSTER × SAMPLE DOMINANCE ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 19.1 — Validate metadata
-# ----------------------------------------------------------------------------
-
-required_columns <- c(
-  "seurat_clusters",
+# ==============================================================================
+# 4. CHECK CLINICAL-STATE AND DONOR METADATA
+# ==============================================================================
+
+required_metadata <- c(
+  "Phase",
+  "Donor",
   "GSM"
 )
 
-missing_columns <- setdiff(
-  required_columns,
+missing_metadata <- base::setdiff(
+  required_metadata,
   colnames(atlas_sketch@meta.data)
 )
 
-if (length(missing_columns) > 0) {
-  
+if (length(missing_metadata) > 0) {
   stop(
-    "ERROR: Required metadata columns are missing: ",
-    paste(
-      missing_columns,
-      collapse = ", "
-    )
+    "Required metadata missing: ",
+    paste(missing_metadata, collapse = ", ")
   )
 }
 
 
-# ----------------------------------------------------------------------------
-# 19.2 — Cluster × sample counts
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 5. STANDARDIZE CLUSTER METADATA
+# ==============================================================================
 
-cluster_sample_counts <-
-  atlas_sketch@meta.data %>%
-  dplyr::count(
-    seurat_clusters,
-    GSM,
-    name = "Cells"
-  ) %>%
-  dplyr::arrange(
-    as.numeric(as.character(seurat_clusters)),
-    desc(Cells)
+atlas_sketch$Atlas_Cluster <-
+  factor(
+    as.character(atlas_sketch$seurat_clusters),
+    levels = cluster_ids
   )
 
 
-# ----------------------------------------------------------------------------
-# 19.3 — Sample composition within each cluster
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 6. CHECKPOINT SUMMARY
+# ==============================================================================
 
-cluster_sample_composition <-
-  cluster_sample_counts %>%
-  group_by(seurat_clusters) %>%
+atlas_summary <- tibble(
+  Metric = c(
+    "Cells",
+    "Genes",
+    "Atlas clusters",
+    "Clinical states",
+    "Donors",
+    "Samples"
+  ),
+  Value = c(
+    ncol(atlas_sketch),
+    nrow(atlas_sketch),
+    n_atlas_clusters,
+    n_distinct(atlas_sketch$Phase),
+    n_distinct(atlas_sketch$Donor),
+    n_distinct(atlas_sketch$GSM)
+  )
+)
+
+print(atlas_summary)
+
+
+# ==============================================================================
+# 17. CLUSTER × CLINICAL STATE COMPOSITION
+# ==============================================================================
+
+message("Section 17: cluster × clinical state composition...")
+
+cluster_phase_counts <- atlas_sketch@meta.data %>%
+  dplyr::count(
+    Atlas_Cluster,
+    Phase,
+    name = "Cells"
+  )
+
+cluster_phase_within_state <- cluster_phase_counts %>%
+  group_by(Phase) %>%
   mutate(
-    Cluster_Total =
-      sum(Cells),
-    Sample_Proportion =
-      Cells / Cluster_Total,
-    Sample_Percent =
-      100 * Sample_Proportion
+    Proportion_Within_State = Cells / sum(Cells)
   ) %>%
   ungroup()
 
-
-# ----------------------------------------------------------------------------
-# 19.4 — Dominant sample
-# ----------------------------------------------------------------------------
-
-cluster_sample_dominance <-
-  cluster_sample_composition %>%
-  dplyr::group_by(seurat_clusters) %>%
-  dplyr::slice_max(
-    order_by = Cells,
-    n = 1,
-    with_ties = FALSE
+cluster_phase_within_cluster <- cluster_phase_counts %>%
+  group_by(Atlas_Cluster) %>%
+  mutate(
+    Proportion_Within_Cluster = Cells / sum(Cells)
   ) %>%
-  dplyr::ungroup() %>%
-  dplyr::select(
-    seurat_clusters,
-    Dominant_Sample = GSM,
-    Dominant_Sample_Cells = Cells,
-    Dominant_Sample_Percent = Sample_Percent
+  ungroup()
+
+write.csv(
+  cluster_phase_counts,
+  "results/phase3_annotation/cluster_by_phase_counts.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  cluster_phase_within_state,
+  "results/phase3_annotation/cluster_by_phase_within_state.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  cluster_phase_within_cluster,
+  "results/phase3_annotation/cluster_by_phase_within_cluster.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 18. CLUSTER × DONOR REPRESENTATION
+# ==============================================================================
+
+message("Section 18: cluster × donor representation...")
+
+cluster_donor_counts <- atlas_sketch@meta.data %>%
+  dplyr::count(
+    Atlas_Cluster,
+    Donor,
+    name = "Cells"
   )
 
-# ----------------------------------------------------------------------------
-# 19.5 — Cluster-level sample summary
-# ----------------------------------------------------------------------------
-
-cluster_sample_summary <-
-  cluster_sample_composition %>%
-  group_by(seurat_clusters) %>%
+cluster_donor_summary <- cluster_donor_counts %>%
+  group_by(Atlas_Cluster) %>%
   summarise(
-    Cluster_Cells =
-      sum(Cells),
-    Samples_Represented =
-      n_distinct(GSM),
+    Number_of_Donors = n_distinct(Donor),
+    Total_Cells = sum(Cells),
+    Dominant_Donor = Donor[which.max(Cells)],
+    Dominant_Donor_Cells = max(Cells),
+    Dominant_Donor_Percentage =
+      100 * max(Cells) / sum(Cells),
     .groups = "drop"
-  ) %>%
-  left_join(
-    cluster_sample_dominance,
-    by = "seurat_clusters"
-  ) %>%
-  arrange(
-    as.numeric(
-      as.character(seurat_clusters)
-    )
   )
 
-cat(
-  "Dominant sample by cluster:\n\n"
+write.csv(
+  cluster_donor_counts,
+  "results/phase3_annotation/cluster_by_donor_counts.csv",
+  row.names = FALSE
 )
 
-print(
-  cluster_sample_summary,
-  n = Inf
+write.csv(
+  cluster_donor_summary,
+  "results/phase3_annotation/cluster_donor_summary.csv",
+  row.names = FALSE
 )
 
 
-# ----------------------------------------------------------------------------
-# 19.6 — Save tables
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 19. CLUSTER × SAMPLE REPRESENTATION
+# ==============================================================================
 
-write_csv(
+message("Section 19: cluster × sample representation...")
+
+cluster_sample_counts <- atlas_sketch@meta.data %>%
+  dplyr::count(
+    Atlas_Cluster,
+    GSM,
+    name = "Cells"
+  )
+
+cluster_sample_summary <- cluster_sample_counts %>%
+  group_by(Atlas_Cluster) %>%
+  summarise(
+    Number_of_Samples = n_distinct(GSM),
+    Total_Cells = sum(Cells),
+    Dominant_Sample = GSM[which.max(Cells)],
+    Dominant_Sample_Cells = max(Cells),
+    Dominant_Sample_Percentage =
+      100 * max(Cells) / sum(Cells),
+    .groups = "drop"
+  )
+
+write.csv(
   cluster_sample_counts,
-  "results/tables/phase3_cluster_x_sample_counts.csv"
+  "results/phase3_annotation/cluster_by_sample_counts.csv",
+  row.names = FALSE
 )
 
-write_csv(
-  cluster_sample_composition,
-  "results/tables/phase3_cluster_x_sample_composition.csv"
-)
-
-write_csv(
+write.csv(
   cluster_sample_summary,
-  "results/tables/phase3_cluster_sample_dominance.csv"
-)
-
-cat(
-  "\n✓ Cluster × sample tables saved\n\n"
+  "results/phase3_annotation/cluster_sample_summary.csv",
+  row.names = FALSE
 )
 
 
-# ----------------------------------------------------------------------------
-# 19.7 — Cluster × sample heatmap
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 20. DESCRIPTIVE CLUSTER MARKER DISCOVERY
+# ==============================================================================
 
-p_cluster_sample <-
-  ggplot(
-    cluster_sample_composition,
-    aes(
-      x = GSM,
-      y = factor(
-        seurat_clusters,
-        levels = sort(
-          unique(seurat_clusters)
-        )
-      ),
-      fill = Sample_Percent
-    )
-  ) +
-  geom_tile(
-    color = "white"
-  ) +
-  labs(
-    title =
-      "Global Atlas — Cluster Composition by Sample",
-    x =
-      "Sample",
-    y =
-      "Cluster",
-    fill =
-      "Percent"
-  ) +
-  theme_bw() +
-  theme(
-    axis.text.x =
-      element_text(
-        angle = 60,
-        hjust = 1,
-        size = 7
-      ),
-    plot.title =
-      element_text(
-        hjust = 0.5
-      )
-  )
-
-ggsave(
-  "results/figures/phase3_cluster_x_sample_heatmap.png",
-  p_cluster_sample,
-  width = 14,
-  height = 8,
-  dpi = 300
-)
-
-cat(
-  "✓ Cluster × sample heatmap saved\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 19.8 — Dominant sample plot
-# ----------------------------------------------------------------------------
-
-p_sample_dominance <-
-  ggplot(
-    cluster_sample_summary,
-    aes(
-      x = factor(
-        seurat_clusters,
-        levels = sort(
-          unique(seurat_clusters)
-        )
-      ),
-      y = Dominant_Sample_Percent
-    )
-  ) +
-  geom_col() +
-  geom_text(
-    aes(
-      label = Dominant_Sample
-    ),
-    vjust = -0.3,
-    size = 3
-  ) +
-  labs(
-    title =
-      "Global Atlas — Dominant Sample Contribution by Cluster",
-    x =
-      "Cluster",
-    y =
-      "Cells from Dominant Sample (%)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title =
-      element_text(
-        hjust = 0.5
-      )
-  )
-
-ggsave(
-  "results/figures/phase3_cluster_sample_dominance.png",
-  p_sample_dominance,
-  width = 11,
-  height = 7,
-  dpi = 300
-)
-
-cat(
-  "✓ Dominant-sample plot saved\n\n"
-)
-
-cat(
-  "=== SECTION 19 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 20 — CLUSTER MARKER DISCOVERY
-# ============================================================================
-
-cat("=== SECTION 20: CLUSTER MARKER DISCOVERY ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 20.1 — Activate RNA assay
-# ----------------------------------------------------------------------------
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 20.2 — Join RNA layers
-# ----------------------------------------------------------------------------
-
-cat(
-  "Joining RNA assay layers...\n"
-)
+message("Section 20: descriptive cluster marker discovery...")
 
 atlas_sketch <- JoinLayers(
   object = atlas_sketch,
   assay = "RNA"
-)
-
-cat(
-  "✓ RNA assay layers joined\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 20.3 — Find cluster markers
-# ----------------------------------------------------------------------------
-
-cat(
-  "Running FindAllMarkers...\n\n"
 )
 
 cluster_markers <- FindAllMarkers(
@@ -901,127 +345,27 @@ cluster_markers <- FindAllMarkers(
   verbose = TRUE
 )
 
-cat(
-  "\n✓ FindAllMarkers completed\n\n"
-)
-
-# ----------------------------------------------------------------------------
-# 20.4 — Validate marker table
-# ----------------------------------------------------------------------------
-
 if (nrow(cluster_markers) == 0) {
-  
-  stop(
-    "ERROR: No cluster markers were identified."
-  )
+  stop("No cluster markers were detected.")
 }
-
-required_marker_columns <- c(
-  "gene",
-  "cluster",
-  "p_val",
-  "avg_log2FC",
-  "pct.1",
-  "pct.2",
-  "p_val_adj"
-)
-
-missing_marker_columns <- setdiff(
-  required_marker_columns,
-  colnames(cluster_markers)
-)
-
-if (length(missing_marker_columns) > 0) {
-  
-  stop(
-    "ERROR: Marker table is missing required columns: ",
-    paste(
-      missing_marker_columns,
-      collapse = ", "
-    )
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 20.5 — Confirm all 17 clusters have markers
-# ----------------------------------------------------------------------------
-
-expected_clusters <- sort(
-  unique(
-    as.character(
-      atlas_sketch$seurat_clusters
-    )
-  )
-)
-
-cluster_markers$cluster <- as.character(
-  cluster_markers$cluster
-)
-
-marker_clusters <- sort(
-  unique(
-    cluster_markers$cluster
-  )
-)
-
-missing_clusters <- setdiff(
-  expected_clusters,
-  marker_clusters
-)
-
-if (length(missing_clusters) > 0) {
-  
-  stop(
-    "ERROR: No markers identified for cluster(s): ",
-    paste(
-      missing_clusters,
-      collapse = ", "
-    )
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 20.6 — Add marker rank
-# ----------------------------------------------------------------------------
 
 cluster_markers <- cluster_markers %>%
-  group_by(cluster) %>%
-  arrange(
-    p_val_adj,
-    desc(avg_log2FC),
-    .by_group = TRUE
-  ) %>%
   mutate(
-    Marker_Rank = row_number()
-  ) %>%
-  ungroup()
+    cluster = as.character(cluster)
+  )
 
-
-# ----------------------------------------------------------------------------
-# 20.7 — Save complete marker table
-# ----------------------------------------------------------------------------
-
-write_csv(
+write.csv(
   cluster_markers,
-  "results/tables/phase3_cluster_markers_complete.csv"
-)
-
-cat(
-  "✓ Complete marker table saved\n",
-  "  Rows: ",
-  nrow(cluster_markers),
-  "\n",
-  sep = ""
+  "results/phase3_annotation/cluster_markers_all.csv",
+  row.names = FALSE
 )
 
 
-# ----------------------------------------------------------------------------
-# 20.8 — Top 10 markers
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Top 10 markers per cluster
+# ------------------------------------------------------------------------------
 
-top10_cluster_markers <- cluster_markers %>%
+top10_markers <- cluster_markers %>%
   group_by(cluster) %>%
   arrange(
     p_val_adj,
@@ -1031,791 +375,58 @@ top10_cluster_markers <- cluster_markers %>%
   slice_head(n = 10) %>%
   ungroup()
 
-
-top10_counts <- top10_cluster_markers %>%
-  dplyr::count(
-    cluster,
-    name = "Marker_Count"
-  )
-
-if (
-  nrow(top10_counts) != 17
-) {
-  
-  stop(
-    "ERROR: Top-10 marker table does not contain all 17 clusters."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 20.9 — Save top 10 table
-# ----------------------------------------------------------------------------
-
-write_csv(
-  top10_cluster_markers,
-  "results/tables/phase3_cluster_markers_top10.csv"
+write.csv(
+  top10_markers,
+  "results/phase3_annotation/cluster_top10_markers.csv",
+  row.names = FALSE
 )
 
 
-# ----------------------------------------------------------------------------
-# 20.10 — Compact top 10 summary
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Validate marker coverage
+# ------------------------------------------------------------------------------
 
-top10_marker_summary <- top10_cluster_markers %>%
-  group_by(cluster) %>%
-  summarise(
-    Top10_Markers =
-      paste(
-        gene,
-        collapse = ", "
-      ),
-    .groups = "drop"
-  ) %>%
-  arrange(
-    as.numeric(
-      as.character(cluster)
+marker_clusters <- sort(
+  unique(
+    cluster_markers$cluster
+  )
+)
+
+if (!setequal(marker_clusters, cluster_ids)) {
+  
+  missing_marker_clusters <-
+    base::setdiff(
+      cluster_ids,
+      marker_clusters
     )
-  )
-
-write_csv(
-  top10_marker_summary,
-  "results/tables/phase3_cluster_markers_top10_summary.csv"
-)
-
-cat(
-  "✓ Top-10 marker tables saved\n\n"
-)
-
-print(
-  top10_marker_summary,
-  n = Inf
-)
-
-cat("\n")
-
-
-# ----------------------------------------------------------------------------
-# 20.11 — Save marker checkpoint
-# ----------------------------------------------------------------------------
-
-saveRDS(
-  atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch_markers.rds"
-)
-
-cat(
-  "✓ Marker checkpoint saved:\n",
-  "  results/rds_objects/phase3_atlas_sketch_markers.rds\n\n"
-)
-
-cat(
-  "=== SECTION 20 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 21 — CANONICAL LINEAGE MARKERS
-# ============================================================================
-
-cat("=== SECTION 21: CANONICAL LINEAGE MARKERS ===\n\n")
-
-atlas_sketch <- readRDS(
-  "results/rds_objects/phase3_atlas_sketch_markers.rds"
-)
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 21.1 — Define canonical marker programs
-# ----------------------------------------------------------------------------
-
-canonical_markers <- list(
   
-  T_Cell = c(
-    "CD3D",
-    "CD3E",
-    "CD3G",
-    "TRBC1",
-    "TRBC2"
-  ),
-  
-  CD8_T = c(
-    "CD8A",
-    "CD8B",
-    "CD3D",
-    "CD3E",
-    "TRBC1",
-    "TRBC2"
-  ),
-  
-  CD4_T = c(
-    "CD4",
-    "IL7R",
-    "LTB",
-    "CCR7",
-    "MALAT1"
-  ),
-  
-  Treg = c(
-    "FOXP3",
-    "IL7R",
-    "CTLA4",
-    "IL2RA",
-    "TNFRSF18",
-    "TNFRSF4",
-    "CCR8"
-  ),
-  
-  NK = c(
-    "NKG7",
-    "GNLY",
-    "FCGR3A",
-    "KLRD1",
-    "TRBC1",
-    "XCL1",
-    "XCL2"
-  ),
-  
-  MAIT = c(
-    "TRAV1-2",
-    "SLC4A10",
-    "KLRB1",
-    "IL7R",
-    "CCL20",
-    "IL23R"
-  ),
-  
-  GammaDelta_T = c(
-    "TRDC",
-    "TRGC1",
-    "TRGC2",
-    "CD3D",
-    "CD3E"
-  ),
-  
-  B_Cell = c(
-    "CD19",
-    "MS4A1",
-    "CD79A",
-    "CD74",
-    "HLA-DRA",
-    "CD22"
-  ),
-  
-  Plasma_Cell = c(
-    "MZB1",
-    "JCHAIN",
-    "SDC1",
-    "TNFRSF17",
-    "DERL3",
-    "IGHG1",
-    "IGHG3",
-    "IGHG4"
-  ),
-  
-  Monocyte_Myeloid = c(
-    "LYZ",
-    "S100A8",
-    "S100A9",
-    "CTSS",
-    "FCN1",
-    "CTSD",
-    "LGALS3",
-    "FCGR3A",
-    "CD14"
-  ),
-  
-  Macrophage = c(
-    "LYZ",
-    "C1QA",
-    "C1QB",
-    "C1QC",
-    "APOE",
-    "TREM2",
-    "CD68",
-    "MSR1"
-  ),
-  
-  Dendritic_Cell = c(
-    "FCER1A",
-    "CST3",
-    "CLEC10A",
-    "CD1C",
-    "HLA-DRA",
-    "FCER1G"
-  ),
-  
-  pDC = c(
-    "GZMB",
-    "CLEC4C",
-    "IRF7",
-    "TCF4",
-    "LILRA4",
-    "PTCRA"
-  )
-)
-
-
-# ----------------------------------------------------------------------------
-# 21.2 — Determine marker availability
-# ----------------------------------------------------------------------------
-
-canonical_markers_present <- lapply(
-  canonical_markers,
-  function(x) {
-    unique(
-      intersect(
-        x,
-        rownames(atlas_sketch)
-      )
+  extra_marker_clusters <-
+    base::setdiff(
+      marker_clusters,
+      cluster_ids
     )
-  }
-)
-
-cat(
-  "Canonical marker availability:\n\n"
-)
-
-for (cell_type in names(canonical_markers_present)) {
   
-  cat(
-    sprintf(
-      "%-20s %2d / %2d markers present\n",
-      cell_type,
-      length(
-        canonical_markers_present[[cell_type]]
-      ),
-      length(
-        canonical_markers[[cell_type]]
-      )
-    )
-  )
-}
-
-cat("\n")
-
-
-# ----------------------------------------------------------------------------
-# 21.3 — Validate marker programs
-# ----------------------------------------------------------------------------
-
-program_sizes <- lengths(
-  canonical_markers_present
-)
-
-if (
-  any(
-    program_sizes < 3
-  )
-) {
-  
-  bad_programs <- names(
-    program_sizes[
-      program_sizes < 3
-    ]
-  )
-  
-  stop(
-    "ERROR: Insufficient canonical markers in: ",
+  warning(
+    "Marker output does not contain exactly the atlas cluster set.\n",
+    "Missing: ",
     paste(
-      bad_programs,
+      missing_marker_clusters,
+      collapse = ", "
+    ),
+    "\nExtra: ",
+    paste(
+      extra_marker_clusters,
       collapse = ", "
     )
   )
 }
 
 
-# ----------------------------------------------------------------------------
-# 21.4 — Save canonical marker table
-# ----------------------------------------------------------------------------
-
-canonical_marker_table <- do.call(
-  rbind,
-  lapply(
-    names(canonical_markers_present),
-    function(cell_type) {
-      
-      data.frame(
-        CellType =
-          cell_type,
-        Marker =
-          canonical_markers_present[[cell_type]],
-        stringsAsFactors = FALSE
-      )
-      
-    }
-  )
-)
-
-write_csv(
-  canonical_marker_table,
-  "results/tables/phase3_canonical_lineage_markers.csv"
-)
-
-saveRDS(
-  canonical_markers_present,
-  "results/rds_objects/phase3_canonical_lineage_markers.rds"
-)
-
-cat(
-  "✓ Canonical marker definitions saved\n\n"
-)
-
-cat(
-  "=== SECTION 21 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 22 — CANONICAL MARKER HEATMAP
-# ============================================================================
-#
-# Cluster-level average expression is used rather than plotting all 20,000
-# cells. This makes the canonical lineage programs interpretable across the
-# 17 atlas clusters.
-#
-# ============================================================================
-
-cat("=== SECTION 22: CANONICAL MARKER HEATMAP ===\n\n")
-
-atlas_sketch <- readRDS(
-  "results/rds_objects/phase3_atlas_sketch_markers.rds"
-)
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-canonical_markers_present <- readRDS(
-  "results/rds_objects/phase3_canonical_lineage_markers.rds"
-)
-
-expected_clusters <- sort(
-  unique(
-    as.character(
-      atlas_sketch$seurat_clusters
-    )
-  )
-)
-
-cluster_ids <- as.character(
-  Idents(atlas_sketch)
-)
-
-
-# ----------------------------------------------------------------------------
-# 22.1 — Confirm clusters
-# ----------------------------------------------------------------------------
-
-if (
-  !all(
-    expected_clusters %in%
-    unique(cluster_ids)
-  )
-) {
-  
-  stop(
-    "ERROR: Clusters 0–17 were not all found."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 22.2 — Prepare marker list
-# ----------------------------------------------------------------------------
-
-canonical_marker_genes <- unique(
-  unlist(
-    canonical_markers_present
-  )
-)
-
-canonical_marker_genes <- intersect(
-  canonical_marker_genes,
-  rownames(atlas_sketch)
-)
-
-if (
-  length(canonical_marker_genes) == 0
-) {
-  
-  stop(
-    "ERROR: No canonical marker genes are present."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# 22.3 — Extract normalized expression
-# ----------------------------------------------------------------------------
-
-expression_matrix <- SeuratObject::LayerData(
-  object = atlas_sketch,
-  assay = "RNA",
-  layer = "data"
-)
-
-expression_matrix <- expression_matrix[
-  canonical_marker_genes,
-  ,
-  drop = FALSE
-]
-
-
-# ----------------------------------------------------------------------------
-# 22.4 — Calculate cluster-level average expression
-# ----------------------------------------------------------------------------
-
-cluster_average <- matrix(
-  
-  NA_real_,
-  
-  nrow =
-    length(canonical_marker_genes),
-  
-  ncol =
-    length(expected_clusters),
-  
-  dimnames = list(
-    canonical_marker_genes,
-    expected_clusters
-  )
-)
-
-for (cluster in expected_clusters) {
-  
-  cells_in_cluster <- which(
-    cluster_ids == cluster
-  )
-  
-  if (
-    length(cells_in_cluster) == 0
-  ) {
-    
-    stop(
-      "ERROR: Cluster ",
-      cluster,
-      " contains no cells."
-    )
-  }
-  
-  cluster_average[, cluster] <-
-    Matrix::rowMeans(
-      expression_matrix[
-        ,
-        cells_in_cluster,
-        drop = FALSE
-      ]
-    )
-}
-
-
-# ----------------------------------------------------------------------------
-# 22.5 — Order markers by lineage program
-# ----------------------------------------------------------------------------
-
-ordered_marker_genes <- unique(
-  unlist(
-    lapply(
-      names(canonical_markers_present),
-      function(cell_type) {
-        
-        intersect(
-          canonical_markers_present[[cell_type]],
-          rownames(cluster_average)
-        )
-        
-      }
-    ),
-    use.names = FALSE
-  )
-)
-
-cluster_average <- cluster_average[
-  ordered_marker_genes,
-  expected_clusters,
-  drop = FALSE
-]
-
-
-# ----------------------------------------------------------------------------
-# 22.6 — Row-wise Z-score
-# ----------------------------------------------------------------------------
-
-heatmap_matrix <- t(
-  apply(
-    cluster_average,
-    1,
-    function(x) {
-      
-      if (
-        sd(x) == 0
-      ) {
-        
-        return(
-          rep(
-            0,
-            length(x)
-          )
-        )
-      }
-      
-      as.numeric(
-        scale(x)
-      )
-    }
-  )
-)
-
-rownames(heatmap_matrix) <-
-  rownames(cluster_average)
-
-colnames(heatmap_matrix) <-
-  colnames(cluster_average)
-
-
-# ----------------------------------------------------------------------------
-# 22.7 — Prepare plotting data
-# ----------------------------------------------------------------------------
-
-heatmap_df <- expand.grid(
-  Marker =
-    rownames(heatmap_matrix),
-  Cluster =
-    colnames(heatmap_matrix),
-  KEEP.OUT.ATTRS =
-    FALSE,
-  stringsAsFactors =
-    FALSE
-)
-
-heatmap_df$Expression <-
-  as.vector(
-    heatmap_matrix
-  )
-
-heatmap_df$Marker <- factor(
-  heatmap_df$Marker,
-  levels =
-    rev(
-      rownames(heatmap_matrix)
-    )
-)
-
-heatmap_df$Cluster <- factor(
-  heatmap_df$Cluster,
-  levels =
-    expected_clusters
-)
-
-
-# ----------------------------------------------------------------------------
-# 22.8 — Generate heatmap
-# ----------------------------------------------------------------------------
-
-heatmap_plot <- ggplot(
-  heatmap_df,
-  aes(
-    x = Cluster,
-    y = Marker,
-    fill = Expression
-  )
-) +
-  geom_tile(
-    width = 0.95,
-    height = 0.95
-  ) +
-  scale_fill_gradient2(
-    low = "blue",
-    mid = "white",
-    high = "red",
-    midpoint = 0,
-    name = "Z-score"
-  ) +
-  labs(
-    title =
-      "Canonical Lineage Marker Expression",
-    subtitle =
-      "Cluster-level average expression",
-    x =
-      "Cluster",
-    y =
-      "Canonical Marker"
-  ) +
-  theme_minimal(
-    base_size = 11
-  ) +
-  theme(
-    panel.grid =
-      element_blank(),
-    axis.text.x =
-      element_text(
-        size = 10
-      ),
-    axis.text.y =
-      element_text(
-        size = 8
-      ),
-    axis.title =
-      element_text(
-        face = "bold"
-      ),
-    plot.title =
-      element_text(
-        face = "bold",
-        size = 14
-      )
-  )
-
-
-# ----------------------------------------------------------------------------
-# 22.9 — Save heatmap
-# ----------------------------------------------------------------------------
-
-output_png <-
-  "results/figures/phase3_canonical_marker_heatmap.png"
-
-ggsave(
-  filename =
-    output_png,
-  plot =
-    heatmap_plot,
-  width =
-    10,
-  height =
-    12,
-  units =
-    "in",
-  dpi =
-    300,
-  limitsize =
-    FALSE
-)
-
-saveRDS(
-  heatmap_plot,
-  "results/rds_objects/phase3_canonical_marker_heatmap.rds"
-)
-
-cat(
-  "✓ Canonical marker heatmap saved\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 22.10 — Validate heatmap
-# ----------------------------------------------------------------------------
-
-if (
-  !file.exists(output_png)
-) {
-  
-  stop(
-    "ERROR: Canonical marker heatmap was not created."
-  )
-}
-
-if (
-  ncol(heatmap_matrix) != 17
-) {
-  
-  stop(
-    "ERROR: Heatmap does not contain 17 clusters."
-  )
-}
-
-if (
-  any(
-    !is.finite(
-      heatmap_matrix
-    )
-  )
-) {
-  
-  stop(
-    "ERROR: Heatmap contains non-finite values."
-  )
-}
-
-cat(
-  "✓ Canonical marker heatmap validated\n\n"
-)
-
-cat(
-  "=== SECTION 22 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 23 — MULTI-METHOD CELL-TYPE ANNOTATION
-# ============================================================================
-#
-# Evidence streams:
-#   1. Canonical marker programs
-#   2. Module scores
-#   3. Top-50 marker/program overlap
-#   4. SingleR / Monaco reference
-#
-# Final biological labels are manually adjudicated in Section 24.
-#
-# ============================================================================
-
-cat("=== SECTION 23: MULTI-METHOD CELL-TYPE ANNOTATION ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 23.1 — Load SingleR and celldex
-# ----------------------------------------------------------------------------
-
-suppressPackageStartupMessages({
-  library(SingleR)
-  library(celldex)
-})
-
-cat(
-  "✓ SingleR loaded\n"
-)
-
-cat(
-  "✓ celldex loaded\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 23.2 — Load Monaco immune reference
-# ----------------------------------------------------------------------------
-
-monaco_ref <- celldex::MonacoImmuneData(
-  cell.ont = "all"
-)
-
-if (
-  !inherits(
-    monaco_ref,
-    "SummarizedExperiment"
-  )
-) {
-  
-  stop(
-    "ERROR: MonacoImmuneData did not return a SummarizedExperiment."
-  )
-}
-
-cat(
-  "✓ MonacoImmuneData reference loaded\n",
-  "  Reference genes: ",
-  nrow(monaco_ref),
-  "\n",
-  "  Reference samples: ",
-  ncol(monaco_ref),
-  "\n\n",
-  sep = ""
-)
-
-
-# ----------------------------------------------------------------------------
-# 23.3 — Prepare marker programs
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 21. CANONICAL LINEAGE MARKER PROGRAMS
+# ==============================================================================
+
+message("Section 21: canonical lineage marker programs...")
 
 marker_programs <- list(
   
@@ -1846,8 +457,9 @@ marker_programs <- list(
   
   Treg = c(
     "FOXP3",
-    "IL2RA",
+    "IL7R",
     "CTLA4",
+    "IL2RA",
     "TNFRSF18",
     "TNFRSF4",
     "CCR8"
@@ -1856,11 +468,10 @@ marker_programs <- list(
   NK = c(
     "NKG7",
     "GNLY",
-    "KLRD1",
     "FCGR3A",
+    "KLRD1",
     "XCL1",
-    "XCL2",
-    "FGFBP2"
+    "XCL2"
   ),
   
   MAIT = c(
@@ -1904,11 +515,12 @@ marker_programs <- list(
     "LYZ",
     "S100A8",
     "S100A9",
-    "FCN1",
-    "CD14",
     "CTSS",
+    "FCN1",
     "CTSD",
     "LGALS3",
+    "FCGR3A",
+    "CD14",
     "TREM1"
   ),
   
@@ -1933,7 +545,6 @@ marker_programs <- list(
   ),
   
   pDC = c(
-    "GZMB",
     "CLEC4C",
     "IRF7",
     "TCF4",
@@ -1943,1882 +554,1661 @@ marker_programs <- list(
 )
 
 
-# ----------------------------------------------------------------------------
-# 23.4 — Retain genes present in atlas
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Keep only genes actually present in atlas
+# ------------------------------------------------------------------------------
 
 marker_programs_present <- lapply(
   marker_programs,
   function(x) {
-    unique(
-      intersect(
-        x,
-        rownames(atlas_sketch)
-      )
+    intersect(
+      x,
+      rownames(atlas_sketch)
     )
   }
 )
 
-program_sizes <- lengths(
-  marker_programs_present
+marker_program_sizes <- tibble(
+  Program = names(marker_programs_present),
+  Requested_Genes = lengths(marker_programs),
+  Genes_Present = lengths(marker_programs_present)
+)
+
+print(marker_program_sizes)
+
+write.csv(
+  marker_program_sizes,
+  "results/phase3_annotation/marker_program_gene_availability.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 22. CANONICAL MARKER HEATMAP
+# ==============================================================================
+
+message("Section 22: canonical marker heatmap...")
+
+genes_for_heatmap <- unique(
+  unlist(marker_programs_present)
+)
+
+genes_for_heatmap <- genes_for_heatmap[
+  genes_for_heatmap %in% rownames(atlas_sketch)
+]
+
+if (length(genes_for_heatmap) == 0) {
+  stop(
+    "No canonical marker genes are present in the atlas."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# 22.1 AVERAGE EXPRESSION BY CLUSTER
+# ------------------------------------------------------------------------------
+
+cluster_average_expression <- AverageExpression(
+  object = atlas_sketch,
+  assays = "RNA",
+  features = genes_for_heatmap,
+  group.by = "Atlas_Cluster",
+  layer = "data",
+  verbose = FALSE
+)$RNA
+
+
+# ------------------------------------------------------------------------------
+# 22.2 RESTORE ORIGINAL CLUSTER IDs
+# ------------------------------------------------------------------------------
+
+returned_cluster_ids <- colnames(
+  cluster_average_expression
 )
 
 if (
-  any(
-    program_sizes < 3
+  !all(
+    grepl(
+      "^g[0-9]+$",
+      returned_cluster_ids
+    )
   )
 ) {
   
-  bad_programs <- names(
-    program_sizes[
-      program_sizes < 3
-    ]
+  stop(
+    "Unexpected AverageExpression cluster column names: ",
+    paste(
+      returned_cluster_ids,
+      collapse = ", "
+    )
+  )
+}
+
+restored_cluster_ids <- sub(
+  "^g",
+  "",
+  returned_cluster_ids
+)
+
+if (
+  !setequal(
+    restored_cluster_ids,
+    cluster_ids
+  )
+) {
+  
+  missing_clusters <- base::setdiff(
+    cluster_ids,
+    restored_cluster_ids
+  )
+  
+  extra_clusters <- base::setdiff(
+    restored_cluster_ids,
+    cluster_ids
   )
   
   stop(
-    "ERROR: Insufficient marker genes in: ",
+    "AverageExpression cluster IDs do not match atlas clusters.\n",
+    "Missing: ",
     paste(
-      bad_programs,
+      missing_clusters,
+      collapse = ", "
+    ),
+    "\nExtra: ",
+    paste(
+      extra_clusters,
+      collapse = ", "
+    )
+  )
+}
+
+cluster_average_expression <-
+  cluster_average_expression[
+    ,
+    match(
+      cluster_ids,
+      restored_cluster_ids
+    ),
+    drop = FALSE
+  ]
+
+colnames(
+  cluster_average_expression
+) <- cluster_ids
+
+
+# ------------------------------------------------------------------------------
+# 22.3 FINAL CLUSTER-MATRIX VALIDATION
+# ------------------------------------------------------------------------------
+
+if (
+  ncol(cluster_average_expression) !=
+  n_atlas_clusters
+) {
+  
+  stop(
+    "Cluster-average matrix contains ",
+    ncol(cluster_average_expression),
+    " clusters, but atlas contains ",
+    n_atlas_clusters,
+    "."
+  )
+}
+
+if (
+  !identical(
+    colnames(cluster_average_expression),
+    cluster_ids
+  )
+) {
+  
+  stop(
+    "Cluster-average matrix columns do not match detected atlas clusters."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# 22.4 ROW-WISE Z-SCORE
+# ------------------------------------------------------------------------------
+
+heatmap_matrix <- t(
+  scale(
+    t(cluster_average_expression)
+  )
+)
+
+heatmap_matrix[is.na(heatmap_matrix)] <- 0
+
+
+# ------------------------------------------------------------------------------
+# 22.5 HEATMAP
+# ------------------------------------------------------------------------------
+
+pdf(
+  "results/phase3_annotation/canonical_marker_heatmap.pdf",
+  width = 14,
+  height = 12
+)
+
+pheatmap(
+  heatmap_matrix,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  scale = "none",
+  fontsize_row = 8,
+  fontsize_col = 10,
+  border_color = NA,
+  main = "Canonical lineage marker expression by atlas cluster"
+)
+
+dev.off()
+
+
+# ==============================================================================
+# 23. MULTI-METHOD ANNOTATION EVIDENCE
+# ==============================================================================
+
+message("Section 23: multi-method annotation evidence...")
+
+
+# ==============================================================================
+# 23.1 MARKER-PROGRAM GENE OVERLAP
+# ==============================================================================
+
+message("23.1: marker overlap...")
+
+top50_markers <- cluster_markers %>%
+  group_by(cluster) %>%
+  arrange(
+    p_val_adj,
+    desc(avg_log2FC),
+    .by_group = TRUE
+  ) %>%
+  slice_head(n = 50) %>%
+  ungroup()
+
+
+# ------------------------------------------------------------------------------
+# Construct cluster × program overlap evidence
+# ------------------------------------------------------------------------------
+
+marker_overlap_table <- purrr::map_dfr(
+  cluster_ids,
+  function(cluster_id) {
+    
+    cluster_genes <- top50_markers %>%
+      filter(
+        cluster == cluster_id
+      ) %>%
+      pull(gene)
+    
+    purrr::map_dfr(
+      names(marker_programs_present),
+      function(program_name) {
+        
+        program_genes <- marker_programs_present[[program_name]]
+        
+        overlap_genes <- intersect(
+          cluster_genes,
+          program_genes
+        )
+        
+        tibble(
+          Cluster = cluster_id,
+          Program = program_name,
+          Program_Genes_Present = list(
+            program_genes
+          ),
+          Top50_Genes = list(
+            cluster_genes
+          ),
+          Overlap_Genes = list(
+            overlap_genes
+          ),
+          Overlap_Count = length(
+            overlap_genes
+          ),
+          Program_Genes_Count = length(
+            program_genes
+          ),
+          Overlap_Fraction =
+            ifelse(
+              length(program_genes) > 0,
+              length(overlap_genes) /
+                length(program_genes),
+              NA_real_
+            )
+        )
+      }
+    )
+  }
+)
+
+
+# ------------------------------------------------------------------------------
+# Flat CSV representation
+# ------------------------------------------------------------------------------
+
+marker_overlap_table_csv <- marker_overlap_table %>%
+  ungroup() %>%
+  mutate(
+    Program_Genes_Present =
+      vapply(
+        Program_Genes_Present,
+        paste,
+        collapse = ", ",
+        FUN.VALUE = character(1)
+      ),
+    Top50_Genes =
+      vapply(
+        Top50_Genes,
+        paste,
+        collapse = ", ",
+        FUN.VALUE = character(1)
+      ),
+    Overlap_Genes =
+      vapply(
+        Overlap_Genes,
+        paste,
+        collapse = ", ",
+        FUN.VALUE = character(1)
+      )
+  )
+
+write.csv(
+  marker_overlap_table_csv,
+  "results/phase3_annotation/marker_program_top50_overlap.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 23.2 ADD MODULE SCORES
+# ==============================================================================
+
+message("23.2: module scores...")
+
+module_score_columns <- character(0)
+
+for (program_name in names(marker_programs_present)) {
+  
+  genes <- marker_programs_present[[program_name]]
+  
+  if (length(genes) < 2) {
+    
+    warning(
+      "Skipping module score for ",
+      program_name,
+      ": fewer than two genes are present."
+    )
+    
+    next
+  }
+  
+  atlas_sketch <- AddModuleScore(
+    object = atlas_sketch,
+    features = list(genes),
+    name = paste0(
+      "Module_",
+      program_name
+    ),
+    assay = "RNA",
+    slot = "data",
+    search = FALSE
+  )
+  
+  new_column <- paste0(
+    "Module_",
+    program_name,
+    "1"
+  )
+  
+  if (
+    new_column %in%
+    colnames(atlas_sketch@meta.data)
+  ) {
+    
+    module_score_columns <- c(
+      module_score_columns,
+      new_column
+    )
+  }
+}
+
+
+# ==============================================================================
+# 23.3 CLUSTER-LEVEL MODULE SCORES
+# ==============================================================================
+
+message("23.3: cluster-level module scores...")
+
+if (length(module_score_columns) > 0) {
+  
+  module_score_table <- atlas_sketch@meta.data %>%
+    group_by(Atlas_Cluster) %>%
+    summarise(
+      across(
+        all_of(module_score_columns),
+        ~ mean(
+          .x,
+          na.rm = TRUE
+        )
+      ),
+      .groups = "drop"
+    )
+  
+} else {
+  
+  module_score_table <- tibble(
+    Atlas_Cluster = cluster_ids
+  )
+}
+
+write.csv(
+  module_score_table,
+  "results/phase3_annotation/cluster_module_scores.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 23.4 BEST MODULE-SCORE PROGRAM PER CLUSTER
+# ==============================================================================
+
+message("23.4: strongest module-score programs...")
+
+if (length(module_score_columns) > 0) {
+  
+  module_score_long <- module_score_table %>%
+    pivot_longer(
+      cols = all_of(module_score_columns),
+      names_to = "Program",
+      values_to = "Score"
+    ) %>%
+    mutate(
+      Program = sub(
+        "^Module_",
+        "",
+        Program
+      ),
+      Program = sub(
+        "1$",
+        "",
+        Program
+      )
+    )
+  
+  strongest_module_program <- module_score_long %>%
+    group_by(Atlas_Cluster) %>%
+    arrange(
+      desc(Score),
+      .by_group = TRUE
+    ) %>%
+    mutate(
+      Rank = row_number()
+    ) %>%
+    slice_head(n = 3) %>%
+    ungroup()
+  
+  write.csv(
+    strongest_module_program,
+    "results/phase3_annotation/strongest_module_programs.csv",
+    row.names = FALSE
+  )
+  
+} else {
+  
+  strongest_module_program <- tibble()
+  
+  warning(
+    "No module-score programs were successfully generated."
+  )
+}
+
+
+# ==============================================================================
+# 23.5 SINGLE-R / MONACO IMMUNE REFERENCE
+# ==============================================================================
+
+message("23.5: loading Monaco immune reference...")
+
+monaco_ref <- MonacoImmuneData()
+
+monaco_labels <- colData(
+  monaco_ref
+)$label.fine
+
+if (is.null(monaco_labels)) {
+  
+  stop(
+    "Fine Monaco labels were not found in the reference."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# Cluster-level expression matrix
+# ------------------------------------------------------------------------------
+
+test_expression <- SeuratObject::LayerData(
+  object = atlas_sketch,
+  assay = "RNA",
+  layer = "data"
+)
+
+singleR_clusters <- as.character(
+  atlas_sketch$Atlas_Cluster
+)
+
+if (!identical(
+  colnames(test_expression),
+  colnames(atlas_sketch)
+)) {
+  
+  stop(
+    "LayerData cell order does not match Seurat object cell order."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# Run SingleR
+#
+# prune = FALSE intentionally retained.
+#
+# Therefore the expected result contains:
+#   labels
+#   delta.next
+#
+# and does NOT require:
+#   pruned.labels
+# ------------------------------------------------------------------------------
+
+message(
+  "Running SingleR at cluster level..."
+)
+
+singleR_results <- SingleR(
+  test = test_expression,
+  ref = monaco_ref,
+  labels = monaco_labels,
+  clusters = singleR_clusters,
+  assay.type.test = "logcounts",
+  assay.type.ref = "logcounts",
+  prune = FALSE
+)
+
+singleR_results <- as.data.frame(
+  singleR_results
+)
+
+singleR_results$Cluster <-
+  rownames(singleR_results)
+
+rownames(singleR_results) <- NULL
+
+
+# ------------------------------------------------------------------------------
+# Validate number of cluster results
+# ------------------------------------------------------------------------------
+
+if (
+  nrow(singleR_results) !=
+  n_atlas_clusters
+) {
+  
+  stop(
+    "SingleR returned ",
+    nrow(singleR_results),
+    " cluster results, but atlas contains ",
+    n_atlas_clusters,
+    " clusters."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# Standardize cluster IDs
+# ------------------------------------------------------------------------------
+
+singleR_results$Cluster <-
+  as.character(
+    singleR_results$Cluster
+  )
+
+
+# ------------------------------------------------------------------------------
+# Confirm all expected clusters are present
+# ------------------------------------------------------------------------------
+
+if (
+  !setequal(
+    singleR_results$Cluster,
+    cluster_ids
+  )
+) {
+  
+  missing_clusters <- base::setdiff(
+    cluster_ids,
+    singleR_results$Cluster
+  )
+  
+  extra_clusters <- base::setdiff(
+    singleR_results$Cluster,
+    cluster_ids
+  )
+  
+  stop(
+    "SingleR cluster IDs do not match atlas clusters.\n",
+    "Missing: ",
+    paste(
+      missing_clusters,
+      collapse = ", "
+    ),
+    "\nExtra: ",
+    paste(
+      extra_clusters,
       collapse = ", "
     )
   )
 }
 
 
-# Save marker programs.
+# ------------------------------------------------------------------------------
+# Explicitly reorder SingleR results to atlas cluster order
+# ------------------------------------------------------------------------------
 
-annotation_marker_table <- do.call(
-  rbind,
-  lapply(
-    names(marker_programs_present),
-    function(program_name) {
-      
-      data.frame(
-        Program =
-          program_name,
-        Gene =
-          marker_programs_present[[program_name]],
-        stringsAsFactors =
-          FALSE
-      )
-      
-    }
-  )
-)
-
-write_csv(
-  annotation_marker_table,
-  "results/tables/phase3_annotation_marker_programs.csv"
-)
-
-cat(
-  "✓ Annotation marker programs prepared\n\n"
-)
-
-
-# ============================================================================
-# 23.5 — MODULE SCORE CALCULATION
-# ============================================================================
-
-cat(
-  "Calculating module scores...\n\n"
-)
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-set.seed(1234)
-
-atlas_sketch <- AddModuleScore(
-  
-  object =
-    atlas_sketch,
-  
-  features =
-    marker_programs_present,
-  
-  assay =
-    "RNA",
-  
-  name =
-    "AnnotationModule",
-  
-  ctrl =
-    50,
-  
-  seed =
-    1234,
-  
-  search =
-    FALSE,
-  
-  slot =
-    "data"
-)
-
-
-# ----------------------------------------------------------------------------
-# Rename numbered AddModuleScore columns
-# ----------------------------------------------------------------------------
-
-module_score_columns <- paste0(
-  "AnnotationModule",
-  seq_along(
-    marker_programs_present
-  )
-)
-
-if (
-  !all(
-    module_score_columns %in%
-    colnames(
-      atlas_sketch[[]]
-    )
-  )
-) {
-  
-  stop(
-    "ERROR: Expected AddModuleScore columns were not created."
-  )
-}
-
-for (
-  i in seq_along(
-    marker_programs_present
-  )
-) {
-  
-  old_name <-
-    module_score_columns[i]
-  
-  new_name <- paste0(
-    names(
-      marker_programs_present
-    )[i],
-    "_Score"
-  )
-  
-  atlas_sketch[[new_name]] <-
-    atlas_sketch[[
-      old_name
-    ]]
-}
-
-
-# Remove temporary numbered columns.
-
-atlas_sketch[[
-  module_score_columns
-]] <- NULL
-
-
-module_score_columns_named <- paste0(
-  names(
-    marker_programs_present
+singleR_results <- singleR_results[
+  match(
+    cluster_ids,
+    singleR_results$Cluster
   ),
-  "_Score"
-)
-
-cat(
-  "✓ Module scores calculated\n\n"
-)
-
-
-# ============================================================================
-# 23.6 — VERIFY MODULE SCORES
-# ============================================================================
-
-module_score_matrix <- atlas_sketch[[]][
   ,
-  module_score_columns_named,
   drop = FALSE
 ]
 
-if (
-  ncol(module_score_matrix) !=
-  length(
-    marker_programs_present
-  )
-) {
-  
-  stop(
-    "ERROR: Incorrect number of module-score columns."
-  )
-}
-
-if (
-  nrow(module_score_matrix) !=
-  ncol(atlas_sketch)
-) {
-  
-  stop(
-    "ERROR: Module-score row count does not match atlas cells."
-  )
-}
-
-if (
-  any(
-    !is.finite(
-      as.matrix(
-        module_score_matrix
-      )
-    )
-  )
-) {
-  
-  stop(
-    "ERROR: Module scores contain non-finite values."
-  )
-}
-
-write_csv(
-  tibble(
-    Cell = rownames(
-      module_score_matrix
-    )
-  ) %>%
-    bind_cols(
-      as.data.frame(
-        module_score_matrix
-      )
-    ),
-  "results/tables/phase3_annotation_module_scores_cell_level.csv"
-)
-
-cat(
-  "✓ Module-score matrix verified\n",
-  "  Cells: ",
-  nrow(module_score_matrix),
-  "\n",
-  "  Programs: ",
-  ncol(module_score_matrix),
-  "\n\n",
-  sep = ""
-)
-
-
-# ============================================================================
-# 23.7 — MODULE SCORES BY CLUSTER
-# ============================================================================
-
-expected_clusters <- sort(
-  unique(
-    as.character(
-      atlas_sketch$seurat_clusters
-    )
-  )
-)
-
-cluster_ids <- as.character(
-  Idents(atlas_sketch)
-)
-
-cluster_score_matrix <- matrix(
-  
-  NA_real_,
-  
-  nrow =
-    length(
-      module_score_columns_named
-    ),
-  
-  ncol =
-    length(
-      expected_clusters
-    ),
-  
-  dimnames = list(
-    module_score_columns_named,
-    expected_clusters
-  )
-)
-
-for (
-  cluster in expected_clusters
-) {
-  
-  cells_in_cluster <- which(
-    cluster_ids == cluster
-  )
-  
-  if (
-    length(cells_in_cluster) == 0
-  ) {
-    
-    stop(
-      "ERROR: Cluster ",
-      cluster,
-      " contains no cells."
-    )
-  }
-  
-  cluster_score_matrix[
-    ,
-    cluster
-  ] <-
-    colMeans(
-      module_score_matrix[
-        cells_in_cluster,
-        ,
-        drop = FALSE
-      ]
-    )
-}
-
 write.csv(
-  cluster_score_matrix,
-  "results/tables/phase3_annotation_module_scores_by_cluster.csv",
-  row.names = TRUE
-)
-
-cat(
-  "✓ Cluster-level module scores calculated and saved\n\n"
-)
-
-
-# ============================================================================
-# 23.8 — MODULE-BASED ANNOTATION
-# ============================================================================
-
-module_based_annotation <- data.frame(
-  Cluster =
-    expected_clusters,
-  stringsAsFactors =
-    FALSE
-)
-
-best_program <- character(
-  length(
-    expected_clusters
-  )
-)
-
-best_score <- numeric(
-  length(
-    expected_clusters
-  )
-)
-
-second_score <- numeric(
-  length(
-    expected_clusters
-  )
-)
-
-score_gap <- numeric(
-  length(
-    expected_clusters
-  )
-)
-
-
-for (
-  i in seq_along(
-    expected_clusters
-  )
-) {
-  
-  scores <- cluster_score_matrix[
-    ,
-    expected_clusters[i]
-  ]
-  
-  scores_sorted <- sort(
-    scores,
-    decreasing = TRUE
-  )
-  
-  best_program[i] <-
-    sub(
-      "_Score$",
-      "",
-      names(
-        scores_sorted
-      )[1]
-    )
-  
-  best_score[i] <-
-    scores_sorted[1]
-  
-  second_score[i] <-
-    scores_sorted[2]
-  
-  score_gap[i] <-
-    scores_sorted[1] -
-    scores_sorted[2]
-}
-
-
-module_based_annotation$Module_Label <-
-  best_program
-
-module_based_annotation$Top_Score <-
-  best_score
-
-module_based_annotation$Second_Score <-
-  second_score
-
-module_based_annotation$Score_Gap <-
-  score_gap
-
-module_based_annotation$Confidence <-
-  ifelse(
-    module_based_annotation$Score_Gap >= 0.20,
-    "High",
-    ifelse(
-      module_based_annotation$Score_Gap >= 0.10,
-      "Moderate",
-      "Low"
-    )
-  )
-
-
-write_csv(
-  module_based_annotation,
-  "results/tables/phase3_module_based_annotation.csv"
-)
-
-cat(
-  "Module-based annotation:\n\n"
-)
-
-print(
-  module_based_annotation,
+  singleR_results,
+  "results/phase3_annotation/singler_monaco_results.csv",
   row.names = FALSE
 )
 
-cat("\n")
 
+# ==============================================================================
+# 23.6 COMPACT SINGLE-R SUMMARY
+# ==============================================================================
 
-# ============================================================================
-# 23.9 — MODULE SCORE HEATMAP
-# ============================================================================
-
-module_heatmap_matrix <- t(
-  apply(
-    cluster_score_matrix,
-    1,
-    function(x) {
-      
-      if (
-        sd(x) == 0
-      ) {
-        
-        return(
-          rep(
-            0,
-            length(x)
-          )
-        )
-      }
-      
-      as.numeric(
-        scale(x)
-      )
-    }
-  )
+message(
+  "23.6: constructing compact SingleR summary..."
 )
 
-rownames(module_heatmap_matrix) <-
-  rownames(cluster_score_matrix)
+singleR_summary <- singleR_results[
+  ,
+  c(
+    "Cluster",
+    "labels",
+    "delta.next"
+  ),
+  drop = FALSE
+]
 
-colnames(module_heatmap_matrix) <-
-  colnames(cluster_score_matrix)
-
-
-module_heatmap_df <- expand.grid(
-  Program =
-    rownames(
-      module_heatmap_matrix
-    ),
-  Cluster =
-    colnames(
-      module_heatmap_matrix
-    ),
-  KEEP.OUT.ATTRS =
-    FALSE,
-  stringsAsFactors =
-    FALSE
+colnames(singleR_summary) <- c(
+  "Atlas_Cluster",
+  "SingleR_Label",
+  "SingleR_Delta_Next"
 )
 
-module_heatmap_df$Score <-
-  as.vector(
-    module_heatmap_matrix
+singleR_summary$Atlas_Cluster <-
+  as.character(
+    singleR_summary$Atlas_Cluster
   )
 
-module_heatmap_df$Program <- factor(
-  module_heatmap_df$Program,
-  levels =
-    rev(
-      rownames(
-        module_heatmap_matrix
-      )
-    )
-)
-
-module_heatmap_df$Cluster <- factor(
-  module_heatmap_df$Cluster,
-  levels =
-    expected_clusters
+write.csv(
+  singleR_summary,
+  "results/phase3_annotation/singler_summary.csv",
+  row.names = FALSE
 )
 
 
-module_heatmap_plot <- ggplot(
-  module_heatmap_df,
-  aes(
-    x = Cluster,
-    y = Program,
-    fill = Score
-  )
-) +
-  geom_tile(
-    width = 0.95,
-    height = 0.95
-  ) +
-  scale_fill_gradient2(
-    low = "blue",
-    mid = "white",
-    high = "red",
-    midpoint = 0,
-    name = "Module\nZ-score"
-  ) +
-  labs(
-    title =
-      "Canonical Lineage Module Scores",
-    subtitle =
-      "Cluster-level average module scores",
-    x =
-      "Cluster",
-    y =
-      "Cell-type Program"
-  ) +
-  theme_minimal(
-    base_size = 11
-  ) +
-  theme(
-    panel.grid =
-      element_blank(),
-    axis.text.x =
-      element_text(
-        size = 10
-      ),
-    axis.text.y =
-      element_text(
-        size = 9
-      ),
-    axis.title =
-      element_text(
-        face = "bold"
-      ),
-    plot.title =
-      element_text(
-        face = "bold",
-        size = 14
-      )
-  )
+# ==============================================================================
+# 23.7 COMBINED ANNOTATION EVIDENCE TABLE
+# ==============================================================================
 
-ggsave(
-  "results/figures/phase3_module_score_heatmap.png",
-  module_heatmap_plot,
-  width = 10,
-  height = 8,
-  units = "in",
-  dpi = 300,
-  limitsize = FALSE
-)
-
-cat(
-  "✓ Module-score heatmap saved\n\n"
+message(
+  "23.7: constructing combined evidence table..."
 )
 
 
-# ============================================================================
-# 23.10 — TOP 50 MARKERS PER CLUSTER
-# ============================================================================
-
-cat(
-  "Extracting top 50 markers per cluster...\n\n"
-)
-
-cluster_markers <- read_csv(
-  "results/tables/phase3_cluster_markers_complete.csv",
-  show_col_types = FALSE
-)
-
-cluster_markers$cluster <- as.character(
-  cluster_markers$cluster
-)
+# ------------------------------------------------------------------------------
+# Best module score
+# ------------------------------------------------------------------------------
 
 if (
-  !"Marker_Rank" %in%
-  colnames(cluster_markers)
+  nrow(strongest_module_program) > 0
 ) {
   
-  stop(
-    "ERROR: Marker_Rank is missing from complete marker table."
+  best_module <- strongest_module_program %>%
+    group_by(Atlas_Cluster) %>%
+    arrange(
+      Rank,
+      .by_group = TRUE
+    ) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    select(
+      Atlas_Cluster,
+      Best_Module_Program = Program,
+      Best_Module_Score = Score
+    )
+  
+} else {
+  
+  best_module <- tibble(
+    Atlas_Cluster = cluster_ids,
+    Best_Module_Program = NA_character_,
+    Best_Module_Score = NA_real_
   )
 }
 
-top50_markers <- cluster_markers %>%
-  group_by(cluster) %>%
+
+# ------------------------------------------------------------------------------
+# Best marker-program overlap
+# ------------------------------------------------------------------------------
+
+best_overlap <- marker_overlap_table %>%
+  group_by(Cluster) %>%
   arrange(
-    Marker_Rank,
+    desc(Overlap_Fraction),
+    desc(Overlap_Count),
     .by_group = TRUE
   ) %>%
-  slice_head(n = 50) %>%
-  ungroup()
-
-if (
-  nrow(top50_markers) != 850
-) {
-  
-  stop(
-    "ERROR: Expected exactly 850 Top-50 marker rows."
-  )
-}
-
-write_csv(
-  top50_markers,
-  "results/tables/phase3_cluster_markers_top50.csv"
-)
-
-cat(
-  "✓ Top-50 marker table saved\n",
-  "  Rows: 850\n\n"
-)
-
-
-# ============================================================================
-# 23.11 — MARKER / PROGRAM OVERLAP
-# ============================================================================
-
-cat(
-  "Calculating marker/program overlap...\n\n"
-)
-
-marker_programs_present <- readRDS(
-  "results/rds_objects/phase3_canonical_lineage_markers.rds"
-)
-
-program_names <- names(
-  marker_programs_present
-)
-
-overlap_counts <- matrix(
-  
-  0L,
-  
-  nrow =
-    length(expected_clusters),
-  
-  ncol =
-    length(program_names),
-  
-  dimnames = list(
-    expected_clusters,
-    program_names
-  )
-)
-
-
-for (
-  cluster in expected_clusters
-) {
-  
-  cluster_genes <- unique(
-    top50_markers$gene[
-      top50_markers$cluster == cluster
-    ]
-  )
-  
-  for (
-    program_name in program_names
-  ) {
-    
-    overlap_counts[
-      cluster,
-      program_name
-    ] <-
-      length(
-        intersect(
-          cluster_genes,
-          marker_programs_present[
-            program_name
-          ]
-        )
-      )
-  }
-}
-
-
-marker_program_overlap <- as.data.frame(
-  overlap_counts,
-  check.names = FALSE
-)
-
-marker_program_overlap$Cluster <-
-  rownames(
-    marker_program_overlap
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(
+    Atlas_Cluster = as.character(Cluster),
+    Best_Top50_Program = Program,
+    Best_Top50_Overlap_Count = Overlap_Count,
+    Best_Top50_Overlap_Fraction =
+      Overlap_Fraction
   )
 
-marker_program_overlap <-
-  marker_program_overlap[
-    ,
-    c(
-      "Cluster",
-      program_names
-    ),
-    drop = FALSE
-  ]
 
-overlap_matrix <- as.matrix(
-  marker_program_overlap[
-    ,
-    program_names,
-    drop = FALSE
-  ]
-)
+# ------------------------------------------------------------------------------
+# Combined table
+# ------------------------------------------------------------------------------
 
-marker_program_overlap$Best_Overlap_Program <-
-  apply(
-    overlap_matrix,
-    1,
-    function(x) {
-      
-      if (
-        max(x) == 0
-      ) {
-        
-        return(
-          NA_character_
-        )
-      }
-      
-      names(x)[
-        which.max(x)
-      ]
-    }
-  )
-
-marker_program_overlap$Best_Overlap_Count <-
-  apply(
-    overlap_matrix,
-    1,
-    max
-  )
-
-write_csv(
-  marker_program_overlap,
-  "results/tables/phase3_marker_program_overlap.csv"
-)
-
-cat(
-  "✓ Marker/program overlap saved\n\n"
-)
-
-
-# ============================================================================
-# 23.12 — SingleR CLUSTER-LEVEL ANNOTATION
-# ============================================================================
-
-cat(
-  "Running SingleR at cluster level...\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# Extract normalized expression
-# ----------------------------------------------------------------------------
-
-test_expression <- SeuratObject::LayerData(
-  object =
-    atlas_sketch,
-  assay =
-    "RNA",
-  layer =
-    "data"
-)
-
-if (
-  ncol(test_expression) !=
-  ncol(atlas_sketch)
-) {
+combined_annotation_evidence <- tibble(
+  Atlas_Cluster = cluster_ids
+) %>%
   
-  stop(
-    "ERROR: SingleR test matrix does not match atlas cell count."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# Cluster identities aligned to expression columns
-# ----------------------------------------------------------------------------
-
-singleR_clusters <- as.character(
-  Idents(atlas_sketch)
-)
-
-names(singleR_clusters) <-
-  colnames(
-    test_expression
-  )
-
-if (
-  length(singleR_clusters) !=
-  ncol(test_expression)
-) {
+  left_join(
+    best_module,
+    by = "Atlas_Cluster"
+  ) %>%
   
-  stop(
-    "ERROR: SingleR cluster vector length mismatch."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# Verify Monaco labels
-# ----------------------------------------------------------------------------
-
-if (
-  !"label.fine" %in%
-  colnames(
-    SummarizedExperiment::colData(
-      monaco_ref
-    )
-  )
-) {
+  left_join(
+    best_overlap,
+    by = "Atlas_Cluster"
+  ) %>%
   
-  stop(
-    "ERROR: Monaco reference does not contain label.fine."
-  )
-}
-
-monaco_labels <- as.character(
-  monaco_ref$label.fine
-)
-
-if (
-  length(monaco_labels) !=
-  ncol(monaco_ref)
-) {
+  left_join(
+    singleR_summary,
+    by = "Atlas_Cluster"
+  ) %>%
   
-  stop(
-    "ERROR: Monaco labels do not match reference samples."
-  )
-}
-
-
-# ----------------------------------------------------------------------------
-# Run SingleR
-# ----------------------------------------------------------------------------
-
-set.seed(1234)
-
-singleR_results <- SingleR::SingleR(
-  
-  test =
-    test_expression,
-  
-  ref =
-    monaco_ref,
-  
-  labels =
-    monaco_labels,
-  
-  clusters =
-    singleR_clusters,
-  
-  assay.type.test =
-    "logcounts",
-  
-  assay.type.ref =
-    "logcounts",
-  
-  prune =
-    FALSE
-)
-
-
-if (
-  nrow(singleR_results) != 17
-) {
-  
-  stop(
-    "ERROR: SingleR did not return exactly 17 cluster results."
-  )
-}
-
-cat(
-  "✓ SingleR cluster-level annotation completed\n\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# Extract SingleR results
-# ----------------------------------------------------------------------------
-
-singleR_cluster_labels <- as.character(
-  singleR_results$labels
-)
-
-singleR_delta <- as.numeric(
-  singleR_results$delta.next
-)
-
-singleR_best_score <- as.numeric(
-  singleR_results$scores[
-    cbind(
-      seq_len(
-        nrow(
-          singleR_results
-        )
+  left_join(
+    cluster_donor_summary %>%
+      mutate(
+        Atlas_Cluster =
+          as.character(Atlas_Cluster)
+      ) %>%
+      select(
+        Atlas_Cluster,
+        Number_of_Donors,
+        Dominant_Donor,
+        Dominant_Donor_Percentage
       ),
-      match(
-        singleR_results$labels,
-        colnames(
-          singleR_results$scores
-        )
-      )
-    )
-  ]
-)
-
-
-singleR_annotation <- data.frame(
+    by = "Atlas_Cluster"
+  ) %>%
   
-  Cluster =
-    rownames(
-      singleR_results
-    ),
-  
-  SingleR_Label =
-    singleR_cluster_labels,
-  
-  SingleR_Best_Score =
-    singleR_best_score,
-  
-  SingleR_Delta_Next =
-    singleR_delta,
-  
-  stringsAsFactors =
-    FALSE
-)
-
-singleR_annotation$Cluster <-
-  as.character(
-    singleR_annotation$Cluster
+  left_join(
+    cluster_sample_summary %>%
+      mutate(
+        Atlas_Cluster =
+          as.character(Atlas_Cluster)
+      ) %>%
+      select(
+        Atlas_Cluster,
+        Number_of_Samples,
+        Dominant_Sample,
+        Dominant_Sample_Percentage
+      ),
+    by = "Atlas_Cluster"
   )
 
-singleR_annotation <-
-  singleR_annotation[
-    match(
-      expected_clusters,
-      singleR_annotation$Cluster
+
+# ------------------------------------------------------------------------------
+# Final combined-table validation
+# ------------------------------------------------------------------------------
+
+if (
+  nrow(combined_annotation_evidence) !=
+  n_atlas_clusters
+) {
+  
+  stop(
+    "Combined annotation evidence contains ",
+    nrow(combined_annotation_evidence),
+    " rows, but atlas contains ",
+    n_atlas_clusters,
+    " clusters."
+  )
+}
+
+if (
+  !setequal(
+    combined_annotation_evidence$Atlas_Cluster,
+    cluster_ids
+  )
+) {
+  
+  stop(
+    "Combined annotation evidence does not contain exactly the atlas clusters."
+  )
+}
+
+write.csv(
+  combined_annotation_evidence,
+  "results/phase3_annotation/combined_annotation_evidence.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 23.8 TOP MARKERS PER CLUSTER FOR MANUAL INSPECTION
+# ==============================================================================
+
+message(
+  "23.8: generating manual annotation inspection table..."
+)
+
+
+# ------------------------------------------------------------------------------
+# Top 20 marker genes per cluster
+# ------------------------------------------------------------------------------
+
+top20_markers <- cluster_markers %>%
+  group_by(cluster) %>%
+  arrange(
+    p_val_adj,
+    desc(avg_log2FC),
+    .by_group = TRUE
+  ) %>%
+  slice_head(n = 20) %>%
+  summarise(
+    Top20_Markers = paste(
+      gene,
+      collapse = ", "
     ),
-    ,
-    drop = FALSE
-  ]
+    .groups = "drop"
+  ) %>%
+  transmute(
+    Atlas_Cluster = as.character(cluster),
+    Top20_Markers = Top20_Markers
+  )
+
+
+# ------------------------------------------------------------------------------
+# Right join to ensure every atlas cluster is represented
+# ------------------------------------------------------------------------------
+
+manual_inspection_table <- top20_markers %>%
+  right_join(
+    combined_annotation_evidence,
+    by = "Atlas_Cluster"
+  )
+
+
+# ------------------------------------------------------------------------------
+# Explicit robust cluster ordering
+# ------------------------------------------------------------------------------
+#
+# The previous implementation used:
+#
+#   match(Atlas_Cluster, cluster_ids)
+#
+# which produced the duplicated.default() error in the user's environment.
+#
+# Here the ordering key is generated directly from the actual cluster IDs.
+# For the current numeric cluster IDs this gives:
+#
+#   0, 1, 2, ... 19
+#
+# ------------------------------------------------------------------------------
+
+manual_inspection_table <- manual_inspection_table %>%
+  mutate(
+    .Atlas_Cluster_Order =
+      match(
+        as.character(Atlas_Cluster),
+        as.character(cluster_ids)
+      )
+  ) %>%
+  arrange(
+    .Atlas_Cluster_Order
+  ) %>%
+  select(
+    - .Atlas_Cluster_Order
+  )
+
+
+# ------------------------------------------------------------------------------
+# Validate manual inspection table
+# ------------------------------------------------------------------------------
+
+if (
+  nrow(manual_inspection_table) !=
+  n_atlas_clusters
+) {
+  
+  stop(
+    "Manual inspection table contains ",
+    nrow(manual_inspection_table),
+    " rows, but atlas contains ",
+    n_atlas_clusters,
+    " clusters."
+  )
+}
+
+if (
+  !setequal(
+    manual_inspection_table$Atlas_Cluster,
+    cluster_ids
+  )
+) {
+  
+  stop(
+    "Manual inspection table does not contain exactly the atlas clusters."
+  )
+}
+
+write.csv(
+  manual_inspection_table,
+  "results/phase3_annotation/MANUAL_ANNOTATION_INSPECTION_TABLE.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 23.9 SAVE ANNOTATION EVIDENCE CHECKPOINT
+# ==============================================================================
+
+message(
+  "23.9: saving evidence checkpoint..."
+)
+
+annotation_evidence <- list(
+  
+  atlas_summary =
+    atlas_summary,
+  
+  cluster_ids =
+    cluster_ids,
+  
+  n_atlas_clusters =
+    n_atlas_clusters,
+  
+  cluster_phase_counts =
+    cluster_phase_counts,
+  
+  cluster_phase_within_state =
+    cluster_phase_within_state,
+  
+  cluster_phase_within_cluster =
+    cluster_phase_within_cluster,
+  
+  cluster_donor_counts =
+    cluster_donor_counts,
+  
+  cluster_donor_summary =
+    cluster_donor_summary,
+  
+  cluster_sample_counts =
+    cluster_sample_counts,
+  
+  cluster_sample_summary =
+    cluster_sample_summary,
+  
+  cluster_markers =
+    cluster_markers,
+  
+  top10_markers =
+    top10_markers,
+  
+  top50_markers =
+    top50_markers,
+  
+  marker_programs =
+    marker_programs_present,
+  
+  marker_program_sizes =
+    marker_program_sizes,
+  
+  marker_overlap_table =
+    marker_overlap_table,
+  
+  module_score_table =
+    module_score_table,
+  
+  strongest_module_program =
+    strongest_module_program,
+  
+  singleR_results =
+    singleR_results,
+  
+  singleR_summary =
+    singleR_summary,
+  
+  combined_annotation_evidence =
+    combined_annotation_evidence,
+  
+  manual_inspection_table =
+    manual_inspection_table
+)
+
+saveRDS(
+  annotation_evidence,
+  evidence_output_file
+)
+
+message(
+  "\nEvidence checkpoint saved to:\n",
+  evidence_output_file
+)
+
+
+# ==============================================================================
+# 23.10 STOP BEFORE FINAL ANNOTATION
+# ==============================================================================
+
+message(
+  "\n============================================================\n",
+  "ANNOTATION EVIDENCE CHECKPOINT COMPLETE\n",
+  "============================================================\n",
+  "\nDetected atlas clusters: ",
+  n_atlas_clusters,
+  "\nClusters: ",
+  paste(
+    cluster_ids,
+    collapse = ", "
+  ),
+  "\n\nReview:\n",
+  "  results/phase3_annotation/MANUAL_ANNOTATION_INSPECTION_TABLE.csv\n",
+  "  results/phase3_annotation/combined_annotation_evidence.csv\n",
+  "  results/phase3_annotation/cluster_top10_markers.csv\n",
+  "  results/phase3_annotation/canonical_marker_heatmap.pdf\n",
+  "  results/phase3_annotation/singler_summary.csv\n",
+  "\nFINAL LABELS HAVE NOT BEEN ASSIGNED.\n",
+  "============================================================\n"
+)
+
+
+# ==============================================================================
+# 24. FINAL CELL-TYPE ANNOTATION
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# MANUAL ADJUDICATION
+# ------------------------------------------------------------------------------
+#
+# IMPORTANT:
+#
+# Before running this section, inspect the evidence generated above.
+#
+# Replace the NA values below with the FINAL adjudicated identity for EVERY
+# detected cluster.
+#
+# DO NOT automatically assign labels from:
+#   - highest module score
+#   - highest marker overlap
+#   - SingleR label
+#   - top marker alone
+#
+# These are evidence streams that must be adjudicated together.
+#
+# ------------------------------------------------------------------------------
+
+
+final_cluster_labels <- tibble(
+  Atlas_Cluster = as.character(0:19),
+  
+  Final_Cell_Type = c(
+    "CD8_T",               # 0
+    "NK",                  # 1
+    "CD4_T",               # 2
+    "MAIT",                # 3
+    "CD8_T",               # 4
+    "NK",                  # 5
+    "MAIT",                # 6
+    "CD8_T",               # 7
+    "CD8_T",               # 8
+    "B_Cell",              # 9
+    "Unresolved_Lymphoid", # 10
+    "Treg",                # 11
+    "NK",                  # 12
+    "NK",                  # 13
+    "NK",                  # 14
+    "Monocyte_Myeloid",    # 15
+    "Monocyte_Myeloid",    # 16
+    "Dendritic_Cell",      # 17
+    "Plasma_Cell",         # 18
+    "pDC"                  # 19
+  ),
+  
+  Confidence = c(
+    "High",     # 0
+    "High",     # 1
+    "High",     # 2
+    "High",     # 3
+    "High",     # 4
+    "High",     # 5
+    "Moderate", # 6
+    "Moderate", # 7
+    "High",     # 8
+    "High",     # 9
+    "Low",      # 10
+    "High",     # 11
+    "High",     # 12
+    "Moderate", # 13
+    "High",     # 14
+    "High",     # 15
+    "High",     # 16
+    "High",     # 17
+    "High",     # 18
+    "High"      # 19
+  ),
+  
+  Rationale = c(
+    "CD8A/CD8B and CCL5/GZMK support a CD8 T-cell identity; CD8 module, marker overlap, and SingleR are concordant.",
+    "GNLY/FGFBP2/PRF1/GZMB/KLRD1/KLRF1 form a strong cytotoxic NK-cell program with concordant module and SingleR evidence.",
+    "CCR7/IL7R/CD4/LTB/S1PR1/CCR6 support a CD4 T-cell identity; reference annotation indicates a Th17-like state.",
+    "TRAV1-2/SLC4A10/KLRB1/IL23R/CCL20/DPP4 provide highly concordant MAIT evidence.",
+    "CD8B/CD3D/GZMA/CCL5 support a CD8 T-cell identity with concordant module, marker and reference evidence.",
+    "KLRF1/KLRC1/NCAM1/XCL1/IL2RB/CD160 support an NK-cell identity with concordant module and SingleR evidence.",
+    "TRAV1-2 and IL7R/AQP3-associated lymphocyte features support MAIT; SingleR strongly agrees, although the CD4 module is also elevated.",
+    "CD8A with PDCD1/TNFRSF9/ITGA4 supports an activated CD8 T-cell state; CD8 module and SingleR agree.",
+    "CD8A/CD8B/CCL5/CST7 provide strong CD8 T-cell evidence across marker, module and reference approaches.",
+    "CD19/MS4A1/CD79A/CD22/CD24/FCRL1/TCL1A provide a clear B-cell program with complete marker-program overlap.",
+    "Conflicting lymphoid and immunoglobulin signals, together with extreme sample dominance, prevent confident lineage assignment; retained as unresolved rather than forced.",
+    "FOXP3/CTLA4/TNFRSF4/TNFRSF18/ICOS/TIGIT provide a highly concordant Treg program with reference support.",
+    "GNLY/FGFBP2/GZMB/GZMH/PRF1/KLRD1 provide a strong cytotoxic NK-cell program with concordant reference evidence.",
+    "NK-associated cytotoxic genes and reference/module evidence favor NK, although TRDC/TRGC expression suggests a possible NK/γδ-T boundary population.",
+    "Strong NK/cytotoxic program and SingleR support NK; TRDC/TRGC expression is noted but does not outweigh the broader identity evidence.",
+    "FCN1/FCAR/FPR2/TREM1/IL1B/CXCL2/CXCL3/OLR1 support an inflammatory monocyte/myeloid identity.",
+    "FCN1/S100A8/S100A9/CD14/VCAN/CSF3R/HK3 provide a strong classical monocyte program.",
+    "CD1C/CLEC10A/FCER1A/FLT3 and C1Q-associated genes support a dendritic-cell identity with concordant reference evidence.",
+    "JCHAIN/MZB1/SDC1/TNFRSF17/DERL3 and immunoglobulin genes provide a clear plasma-cell program.",
+    "LILRA4/CLEC4C/TCF4/PTCRA support a plasmacytoid dendritic-cell identity with concordant module and SingleR evidence."
+  )
+)
+
+
+# ==============================================================================
+# 24.1 VALIDATE MANUAL ANNOTATION TABLE
+# ==============================================================================
+
+message(
+  "Section 24.1: validating final annotation table..."
+)
+
+
+# ------------------------------------------------------------------------------
+# Exact cluster coverage
+# ------------------------------------------------------------------------------
+
+if (
+  !setequal(
+    final_cluster_labels$Atlas_Cluster,
+    cluster_ids
+  )
+) {
+  
+  missing_clusters <- base::setdiff(
+    cluster_ids,
+    final_cluster_labels$Atlas_Cluster
+  )
+  
+  extra_clusters <- base::setdiff(
+    final_cluster_labels$Atlas_Cluster,
+    cluster_ids
+  )
+  
+  stop(
+    "Final annotation table does not exactly match atlas clusters.\n",
+    "Missing clusters: ",
+    paste(
+      missing_clusters,
+      collapse = ", "
+    ),
+    "\nExtra clusters: ",
+    paste(
+      extra_clusters,
+      collapse = ", "
+    )
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# No duplicated cluster assignments
+# ------------------------------------------------------------------------------
+
+if (
+  anyDuplicated(
+    final_cluster_labels$Atlas_Cluster
+  ) > 0
+) {
+  
+  stop(
+    "Duplicate Atlas_Cluster entries found in final annotation table."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# No missing labels
+# ------------------------------------------------------------------------------
 
 if (
   any(
     is.na(
-      singleR_annotation$SingleR_Label
-    )
+      final_cluster_labels$Final_Cell_Type
+    ) |
+    final_cluster_labels$Final_Cell_Type == ""
   )
 ) {
   
   stop(
-    "ERROR: SingleR produced missing labels."
-  )
-}
-
-write_csv(
-  singleR_annotation,
-  "results/tables/phase3_singleR_cluster_annotation.csv"
-)
-
-cat(
-  "✓ SingleR annotation table saved\n\n"
-)
-
-print(
-  singleR_annotation,
-  row.names = FALSE
-)
-
-cat("\n")
-
-
-# ============================================================================
-# 23.13 — CONSOLIDATE ALL ANNOTATION EVIDENCE
-# ============================================================================
-
-cat(
-  "Consolidating annotation evidence...\n\n"
-)
-
-module_based_annotation <- read_csv(
-  "results/tables/phase3_module_based_annotation.csv",
-  show_col_types = FALSE
-)
-
-module_based_annotation$Cluster <-
-  as.character(
-    module_based_annotation$Cluster
-  )
-
-marker_overlap_summary <-
-  marker_program_overlap[
-    ,
-    c(
-      "Cluster",
-      "Best_Overlap_Program",
-      "Best_Overlap_Count"
-    ),
-    drop = FALSE
-  ]
-
-
-annotation_evidence <- data.frame(
-  Cluster =
-    expected_clusters,
-  stringsAsFactors =
-    FALSE
-)
-
-annotation_evidence <-
-  annotation_evidence %>%
-  left_join(
-    module_based_annotation,
-    by = "Cluster"
-  ) %>%
-  left_join(
-    marker_overlap_summary,
-    by = "Cluster"
-  ) %>%
-  left_join(
-    singleR_annotation,
-    by = "Cluster"
-  )
-
-annotation_evidence <-
-  annotation_evidence[
-    match(
-      expected_clusters,
-      annotation_evidence$Cluster
-    ),
-    ,
-    drop = FALSE
-  ]
-
-if (
-  nrow(annotation_evidence) != 17
-) {
-  
-  stop(
-    "ERROR: Consolidated annotation table does not contain 17 clusters."
-  )
-}
-
-write_csv(
-  annotation_evidence,
-  "results/tables/phase3_annotation_evidence_consolidated.csv"
-)
-
-cat(
-  "✓ Consolidated annotation evidence saved\n\n"
-)
-
-print(
-  annotation_evidence,
-  row.names = FALSE
-)
-
-cat("\n")
-
-
-# ============================================================================
-# 23.14 — FINAL MANUAL ANNOTATION TEMPLATE
-# ============================================================================
-
-cat(
-  "Creating final manual annotation template...\n\n"
-)
-
-final_annotation_template <- data.frame(
-  
-  Cluster =
-    expected_clusters,
-  
-  Module_Label =
-    annotation_evidence$Module_Label,
-  
-  Module_Score =
-    annotation_evidence$Top_Score,
-  
-  Module_Score_Gap =
-    annotation_evidence$Score_Gap,
-  
-  Marker_Overlap_Label =
-    annotation_evidence$Best_Overlap_Program,
-  
-  Marker_Overlap_Count =
-    annotation_evidence$Best_Overlap_Count,
-  
-  SingleR_Label =
-    annotation_evidence$SingleR_Label,
-  
-  SingleR_Best_Score =
-    annotation_evidence$SingleR_Best_Score,
-  
-  SingleR_Delta_Next =
-    annotation_evidence$SingleR_Delta_Next,
-  
-  Final_CellType =
-    NA_character_,
-  
-  Confidence =
-    NA_character_,
-  
-  Rationale =
-    NA_character_,
-  
-  stringsAsFactors =
-    FALSE
-)
-
-
-write_csv(
-  final_annotation_template,
-  "results/tables/phase3_final_manual_annotation.csv"
-)
-
-cat(
-  "✓ Final manual annotation template saved\n\n"
-)
-
-
-# ============================================================================
-# 23.15 — ANNOTATION VALIDATION
-# ============================================================================
-
-cat(
-  "Running annotation validation...\n\n"
-)
-
-
-if (
-  ncol(atlas_sketch) != 20000
-) {
-  
-  stop(
-    "ERROR: Atlas does not contain 20,000 cells."
-  )
-}
-
-if (
-  length(
-    unique(
-      cluster_ids
-    )
-  ) != 17
-) {
-  
-  stop(
-    "ERROR: Atlas does not contain 17 clusters."
-  )
-}
-
-if (
-  nrow(cluster_markers) == 0
-) {
-  
-  stop(
-    "ERROR: Marker table is empty."
-  )
-}
-
-if (
-  nrow(top50_markers) != 850
-) {
-  
-  stop(
-    "ERROR: Top-50 marker table does not contain 850 rows."
-  )
-}
-
-if (
-  ncol(module_score_matrix) != 13
-) {
-  
-  stop(
-    "ERROR: Expected 13 module-score programs."
-  )
-}
-
-if (
-  nrow(singleR_annotation) != 17
-) {
-  
-  stop(
-    "ERROR: SingleR annotation does not contain 17 clusters."
-  )
-}
-
-if (
-  nrow(annotation_evidence) != 17
-) {
-  
-  stop(
-    "ERROR: Consolidated annotation does not contain 17 clusters."
-  )
-}
-
-if (
-  nrow(final_annotation_template) != 17
-) {
-  
-  stop(
-    "ERROR: Final annotation template does not contain 17 clusters."
-  )
-}
-
-cat(
-  "✓ Annotation validation passed\n\n"
-)
-
-
-# ============================================================================
-# SAVE PRE-FINAL ANNOTATION OBJECT
-# ============================================================================
-
-saveRDS(
-  atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch_pre_final_annotation.rds"
-)
-
-cat(
-  "✓ Pre-final annotation object saved:\n",
-  "  results/rds_objects/phase3_atlas_sketch_pre_final_annotation.rds\n\n"
-)
-
-
-cat(
-  "=== SECTION 23 COMPLETE ===\n\n"
-)
-
-
-# ============================================================================
-# SECTION 24 — FINAL CELL-TYPE ANNOTATION OF THE SKETCH
-# ============================================================================
-
-cat("=== SECTION 24: FINAL CELL-TYPE ANNOTATION ===\n\n")
-
-
-# ----------------------------------------------------------------------------
-# 24.1 — Reload pre-final checkpoint
-# ----------------------------------------------------------------------------
-
-atlas_sketch <- readRDS(
-  "results/rds_objects/phase3_atlas_sketch_pre_final_annotation.rds"
-)
-
-DefaultAssay(atlas_sketch) <- "RNA"
-
-
-# ----------------------------------------------------------------------------
-# 24.2 — Confirm cluster structure
-# ----------------------------------------------------------------------------
-
-expected_clusters <- sort(
-  unique(
-    as.character(
-      atlas_sketch$seurat_clusters
-    )
-  )
-)
-
-actual_clusters <- unique(
-  as.character(
-    Idents(atlas_sketch)
-  )
-)
-
-if (
-  !setequal(
-    actual_clusters,
-    expected_clusters
-  )
-) {
-  
-  stop(
-    "ERROR: Atlas cluster identities are not exactly 0–17."
+    "\nFINAL ANNOTATION NOT COMPLETE.\n\n",
+    "Every atlas cluster must receive an explicit Final_Cell_Type.\n",
+    "This is intentional: the script will not invent labels."
   )
 }
 
 
-# ----------------------------------------------------------------------------
-# 24.3 — Load consolidated evidence
-# ----------------------------------------------------------------------------
-
-annotation_evidence <- read_csv(
-  "results/tables/phase3_annotation_evidence_consolidated.csv",
-  show_col_types = FALSE
-)
-
-annotation_evidence$Cluster <-
-  as.character(
-    annotation_evidence$Cluster
-  )
-
-annotation_evidence <-
-  annotation_evidence[
-    match(
-      expected_clusters,
-      annotation_evidence$Cluster
-    ),
-    ,
-    drop = FALSE
-  ]
-
-if (
-  nrow(annotation_evidence) != 17
-) {
-  
-  stop(
-    "ERROR: Annotation evidence does not contain 17 clusters."
-  )
-}
-
-# ----------------------------------------------------------------------------
-# 24.4 — FINAL MANUAL CLUSTER LABELS
-# ----------------------------------------------------------------------------
-
-final_cluster_labels <- c(
-  
-  "0"  = "CD8_T",
-  "1"  = "GammaDelta_T",
-  "2"  = "CD4_T",
-  "3"  = "CD8_T",
-  "4"  = "NK",
-  "5"  = "MAIT",
-  "6"  = "CD8_T",
-  "7"  = "CD8_T",
-  "8"  = "CD4_T",
-  "9"  = "CD8_T",
-  "10" = "MAIT",
-  "11" = "Inflammatory_Myeloid",
-  "12" = "B_Cell",
-  "13" = "NK",
-  "14" = "NK",
-  "15" = "Plasma_Cell",
-  "16" = "pDC"
-)
-
-
-final_cluster_confidence <- c(
-  
-  "0"  = "High",
-  "1"  = "Moderate",
-  "2"  = "High",
-  "3"  = "High",
-  "4"  = "High",
-  "5"  = "High",
-  "6"  = "Moderate",
-  "7"  = "Moderate",
-  "8"  = "Low",
-  "9"  = "Low",
-  "10" = "High",
-  "11" = "High",
-  "12" = "High",
-  "13" = "High",
-  "14" = "High",
-  "15" = "High",
-  "16" = "High"
-)
-
-
-final_cluster_rationale <- c(
-  
-  "0"  = "CD8_T module and effector-memory CD8 T-cell SingleR annotation agree.",
-  "1"  = "SingleR supports non-Vd2 gamma-delta T cells, while the module score favors NK; retained as GammaDelta_T with moderate confidence.",
-  "2"  = "CD4_T module and Th1/Th17 SingleR annotation support CD4 T-cell identity.",
-  "3"  = "CD8_T module and effector-memory CD8 T-cell SingleR annotation agree.",
-  "4"  = "NK module and natural-killer-cell SingleR annotation agree.",
-  "5"  = "MAIT module and MAIT-cell SingleR annotation agree.",
-  "6"  = "CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, with a modest module-score gap.",
-  "7"  = "CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, with moderate module-score separation.",
-  "8"  = "CD4_T module is weakly favored, while SingleR favors MAIT; retained as CD4_T with low confidence.",
-  "9"  = "CD8_T module and effector-memory CD8 T-cell SingleR annotation agree, but the SingleR separation is weak.",
-  "10" = "MAIT module and MAIT-cell SingleR annotation agree.",
-  "11" = "Monocyte_Myeloid module and classical-monocyte SingleR annotation agree.",
-  "12" = "B-cell module and non-switched memory B-cell SingleR annotation agree.",
-  "13" = "NK module and natural-killer-cell SingleR annotation agree.",
-  "14" = "NK module and natural-killer-cell SingleR annotation agree.",
-  "15" = "Plasma-cell module and plasmablast SingleR annotation agree.",
-  "16" = "pDC module and plasmacytoid dendritic-cell SingleR annotation agree."
-)
-
-
-# ----------------------------------------------------------------------------
-# 24.5 — Validate final cluster labels
-# ----------------------------------------------------------------------------
-
-expected_clusters <- sort(
-  unique(
-    as.character(
-      Idents(atlas_sketch)
-    )
-  ),
-  method = "radix"
-)
-
-if (
-  length(final_cluster_labels) != length(expected_clusters)
-) {
-  
-  stop(
-    "ERROR: Number of final annotations does not match number of atlas clusters."
-  )
-}
-
-if (
-  !setequal(
-    names(final_cluster_labels),
-    expected_clusters
-  )
-) {
-  
-  stop(
-    "ERROR: Final annotation clusters do not match atlas clusters."
-  )
-}
+# ------------------------------------------------------------------------------
+# No missing confidence
+# ------------------------------------------------------------------------------
 
 if (
   any(
-    is.na(final_cluster_labels)
+    is.na(
+      final_cluster_labels$Confidence
+    ) |
+    final_cluster_labels$Confidence == ""
   )
 ) {
   
   stop(
-    "ERROR: Missing final cluster labels."
+    "Every final annotation must have an explicit Confidence value."
   )
 }
 
 
-# ----------------------------------------------------------------------------
-# 24.6 — Construct final annotation table
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# No missing rationale
+# ------------------------------------------------------------------------------
 
-cluster_counts <- table(
-  factor(
-    as.character(
-      Idents(atlas_sketch)
-    ),
-    levels = expected_clusters
+if (
+  any(
+    is.na(
+      final_cluster_labels$Rationale
+    ) |
+    final_cluster_labels$Rationale == ""
   )
+) {
+  
+  stop(
+    "Every final annotation must have an explicit Rationale."
+  )
+}
+
+
+# ==============================================================================
+# 24.2 VALIDATE CONFIDENCE VOCABULARY
+# ==============================================================================
+
+allowed_confidence <- c(
+  "High",
+  "Moderate",
+  "Low"
 )
 
-final_annotation <- data.frame(
-  
-  Cluster = expected_clusters,
-  
-  Final_CellType =
-    unname(
-      final_cluster_labels[
-        expected_clusters
-      ]
-    ),
-  
-  Cell_Count =
-    as.integer(
-      cluster_counts[
-        expected_clusters
-      ]
-    ),
-  
-  stringsAsFactors = FALSE
+invalid_confidence <- base::setdiff(
+  unique(
+    final_cluster_labels$Confidence
+  ),
+  allowed_confidence
 )
 
-final_annotation$Cell_Percent <-
-  round(
-    100 *
-      final_annotation$Cell_Count /
-      ncol(atlas_sketch),
-    2
+if (
+  length(invalid_confidence) > 0
+) {
+  
+  stop(
+    "Invalid confidence value(s): ",
+    paste(
+      invalid_confidence,
+      collapse = ", "
+    ),
+    "\nAllowed values: ",
+    paste(
+      allowed_confidence,
+      collapse = ", "
+    )
   )
+}
 
 
-# ----------------------------------------------------------------------------
-# 24.7 — Add supporting evidence
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 24.3 VALIDATE FINAL CELL-TYPE VOCABULARY
+# ==============================================================================
 
-evidence_by_cluster <- annotation_evidence
-
-rownames(evidence_by_cluster) <-
-  as.character(
-    evidence_by_cluster$Cluster
-  )
-
-final_annotation$Module_Label <-
-  as.character(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "Module_Label"
-    ][[1]]
-  )
-
-final_annotation$Module_Score_Gap <-
-  as.numeric(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "Score_Gap"
-    ][[1]]
-  )
-
-final_annotation$Marker_Overlap_Label <-
-  as.character(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "Best_Overlap_Program"
-    ][[1]]
-  )
-
-final_annotation$Marker_Overlap_Count <-
-  as.numeric(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "Best_Overlap_Count"
-    ][[1]]
-  )
-
-final_annotation$SingleR_Label <-
-  as.character(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "SingleR_Label"
-    ][[1]]
-  )
-
-final_annotation$SingleR_Delta_Next <-
-  as.numeric(
-    evidence_by_cluster[
-      final_annotation$Cluster,
-      "SingleR_Delta_Next"
-    ][[1]]
-  )
-
-final_annotation$Confidence <-
-  as.character(
-    final_cluster_confidence[
-      final_annotation$Cluster
-    ]
-  )
-
-final_annotation$Rationale <-
-  as.character(
-    final_cluster_rationale[
-      final_annotation$Cluster
-    ]
-  )
-
-# ----------------------------------------------------------------------------
-# 24.8 — Propagate final cluster labels to cells
-# ----------------------------------------------------------------------------
-
-cell_cluster_ids <- as.character(
-  Idents(atlas_sketch)
+allowed_cell_types <- c(
+  "T_Cell",
+  "CD8_T",
+  "CD4_T",
+  "Treg",
+  "NK",
+  "MAIT",
+  "GammaDelta_T",
+  "B_Cell",
+  "Plasma_Cell",
+  "Monocyte_Myeloid",
+  "Macrophage",
+  "Dendritic_Cell",
+  "pDC",
+  "Unresolved_Lymphoid"
 )
 
-atlas_sketch$Final_CellType <-
+invalid_cell_types <- base::setdiff(
+  unique(
+    final_cluster_labels$Final_Cell_Type
+  ),
+  allowed_cell_types
+)
+
+if (
+  length(invalid_cell_types) > 0
+) {
+  
+  stop(
+    "Invalid final cell-type label(s): ",
+    paste(
+      invalid_cell_types,
+      collapse = ", "
+    ),
+    "\nAllowed labels: ",
+    paste(
+      allowed_cell_types,
+      collapse = ", "
+    )
+  )
+}
+
+
+# ==============================================================================
+# 24.4 ORDER FINAL ANNOTATIONS
+# ==============================================================================
+
+final_cluster_labels <- final_cluster_labels %>%
+  mutate(
+    .Atlas_Cluster_Order =
+      match(
+        as.character(Atlas_Cluster),
+        as.character(cluster_ids)
+      )
+  ) %>%
+  arrange(
+    .Atlas_Cluster_Order
+  ) %>%
+  select(
+    - .Atlas_Cluster_Order
+  )
+
+
+# ==============================================================================
+# 24.5 PROPAGATE CLUSTER LABELS TO ALL SKETCH CELLS
+# ==============================================================================
+
+message(
+  "Propagating final cluster annotations to sketch cells..."
+)
+
+label_lookup <- setNames(
+  final_cluster_labels$Final_Cell_Type,
+  final_cluster_labels$Atlas_Cluster
+)
+
+confidence_lookup <- setNames(
+  final_cluster_labels$Confidence,
+  final_cluster_labels$Atlas_Cluster
+)
+
+rationale_lookup <- setNames(
+  final_cluster_labels$Rationale,
+  final_cluster_labels$Atlas_Cluster
+)
+
+atlas_sketch$Final_Cell_Type <-
   unname(
-    final_cluster_labels[
-      cell_cluster_ids
+    label_lookup[
+      as.character(
+        atlas_sketch$Atlas_Cluster
+      )
     ]
   )
 
 atlas_sketch$Annotation_Confidence <-
   unname(
-    final_cluster_confidence[
-      cell_cluster_ids
+    confidence_lookup[
+      as.character(
+        atlas_sketch$Atlas_Cluster
+      )
+    ]
+  )
+
+atlas_sketch$Annotation_Rationale <-
+  unname(
+    rationale_lookup[
+      as.character(
+        atlas_sketch$Atlas_Cluster
+      )
     ]
   )
 
 
-# ----------------------------------------------------------------------------
-# 24.9 — Validate cell-level annotation
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 24.6 FINAL VALIDATION
+# ==============================================================================
 
-if (
-  length(
-    atlas_sketch$Final_CellType
-  ) !=
-  ncol(atlas_sketch)
-) {
-  
-  stop(
-    "ERROR: Final cell-type annotation does not match cell count."
-  )
-}
+message(
+  "Validating final annotation..."
+)
+
+
+# ------------------------------------------------------------------------------
+# No NA labels
+# ------------------------------------------------------------------------------
 
 if (
   any(
     is.na(
-      atlas_sketch$Final_CellType
+      atlas_sketch$Final_Cell_Type
     )
   )
 ) {
   
   stop(
-    "ERROR: Some cells have missing final cell-type labels."
+    "NA final cell-type labels detected after propagation."
   )
 }
 
-cluster_label_check <- tapply(
-  atlas_sketch$Final_CellType,
-  cell_cluster_ids,
-  function(x) {
-    length(
-      unique(x)
-    )
-  }
-)
+
+# ------------------------------------------------------------------------------
+# All clusters represented
+# ------------------------------------------------------------------------------
+
+final_cluster_check <- atlas_sketch@meta.data %>%
+  distinct(
+    Atlas_Cluster,
+    Final_Cell_Type
+  ) %>%
+  mutate(
+    .Atlas_Cluster_Order =
+      match(
+        as.character(Atlas_Cluster),
+        as.character(cluster_ids)
+      )
+  ) %>%
+  arrange(
+    .Atlas_Cluster_Order
+  ) %>%
+  select(
+    - .Atlas_Cluster_Order
+  )
+
+if (
+  nrow(final_cluster_check) !=
+  n_atlas_clusters
+) {
+  
+  stop(
+    "Final annotation does not contain exactly one label per atlas cluster."
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# Exactly one cell type per cluster
+# ------------------------------------------------------------------------------
+
+cluster_label_counts <- atlas_sketch@meta.data %>%
+  dplyr::distinct(
+    Atlas_Cluster,
+    Final_Cell_Type
+  ) %>%
+  dplyr::count(
+    Atlas_Cluster,
+    name = "Number_of_Labels"
+  )
 
 if (
   any(
-    cluster_label_check != 1
+    cluster_label_counts$Number_of_Labels != 1
   )
 ) {
   
   stop(
-    "ERROR: At least one cluster contains multiple final labels."
+    "At least one cluster has multiple final cell-type labels."
   )
 }
 
 
-# ----------------------------------------------------------------------------
-# 24.10 — Display final annotation
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 24.7 FINAL ANNOTATION SUMMARY
+# ==============================================================================
 
-cat(
-  "FINAL CLUSTER ANNOTATION:\n\n"
-)
+final_annotation_summary <- atlas_sketch@meta.data %>%
+  dplyr::count(
+    Final_Cell_Type,
+    name = "Cells"
+  ) %>%
+  dplyr::arrange(
+    desc(Cells)
+  )
 
-print(
-  final_annotation,
+final_cluster_annotation_summary <- atlas_sketch@meta.data %>%
+  dplyr::count(
+    Atlas_Cluster,
+    Final_Cell_Type,
+    Annotation_Confidence,
+    name = "Cells"
+  ) %>%
+  dplyr::mutate(
+    .Atlas_Cluster_Order =
+      match(
+        as.character(Atlas_Cluster),
+        as.character(cluster_ids)
+      )
+  ) %>%
+  dplyr::arrange(
+    .Atlas_Cluster_Order
+  ) %>%
+  dplyr::select(
+    - .Atlas_Cluster_Order
+  )
+
+write.csv(
+  final_cluster_labels,
+  "results/phase3_annotation/final_cluster_annotation_table.csv",
   row.names = FALSE
 )
 
-cat("\n")
-
-cat(
-  "FINAL CELL-TYPE COUNTS:\n\n"
+write.csv(
+  final_annotation_summary,
+  "results/phase3_annotation/final_cell_type_summary.csv",
+  row.names = FALSE
 )
 
-print(
-  sort(
-    table(
-      atlas_sketch$Final_CellType
+write.csv(
+  final_cluster_annotation_summary,
+  "results/phase3_annotation/final_cluster_annotation_summary.csv",
+  row.names = FALSE
+)
+
+
+# ==============================================================================
+# 24.8 FINAL ANNOTATION VALIDATION REPORT
+# ==============================================================================
+
+final_validation_report <- tibble(
+  Metric = c(
+    "Atlas cells",
+    "Atlas genes",
+    "Atlas clusters",
+    "Final annotated clusters",
+    "Clusters with NA labels",
+    "Distinct final cell types"
+  ),
+  Value = c(
+    ncol(atlas_sketch),
+    nrow(atlas_sketch),
+    n_atlas_clusters,
+    n_distinct(atlas_sketch$Atlas_Cluster),
+    sum(
+      is.na(
+        atlas_sketch$Final_Cell_Type
+      )
     ),
-    decreasing = TRUE
+    n_distinct(
+      atlas_sketch$Final_Cell_Type
+    )
   )
 )
 
-cat("\n")
+print(final_validation_report)
 
-
-# ----------------------------------------------------------------------------
-# 24.11 — Save final annotation table
-# ----------------------------------------------------------------------------
-
-write_csv(
-  final_annotation,
-  "results/tables/phase3_final_cell_type_annotation.csv"
-)
-
-cat(
-  "✓ Final cell-type annotation table saved\n"
+write.csv(
+  final_validation_report,
+  "results/phase3_annotation/final_annotation_validation.csv",
+  row.names = FALSE
 )
 
 
-# ----------------------------------------------------------------------------
-# 24.12 — Save cluster-to-cell-type mapping
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# 24.9 SAVE FINAL ANNOTATED ATLAS
+# ==============================================================================
 
-cluster_annotation_mapping <- data.frame(
-  
-  Cluster = expected_clusters,
-  
-  Final_CellType =
-    unname(
-      final_cluster_labels[
-        expected_clusters
-      ]
-    ),
-  
-  Confidence =
-    unname(
-      final_cluster_confidence[
-        expected_clusters
-      ]
-    ),
-  
-  stringsAsFactors = FALSE
+message(
+  "Saving final annotated atlas..."
 )
-
-write_csv(
-  cluster_annotation_mapping,
-  "results/tables/phase3_cluster_to_celltype_mapping.csv"
-)
-
-cat(
-  "✓ Cluster-to-cell-type mapping saved\n"
-)
-
-
-# ----------------------------------------------------------------------------
-# 24.13 — Save final annotated atlas
-# ----------------------------------------------------------------------------
 
 saveRDS(
   atlas_sketch,
-  "results/rds_objects/phase3_atlas_sketch_final_annotation.rds"
+  final_output_file
 )
 
-cat(
-  "✓ Final annotated atlas saved\n\n"
-)
-
-
-# ============================================================================
-# FINAL VALIDATION — SECTIONS 17–24
-# ============================================================================
-
-if (
-  ncol(atlas_sketch) != 20000
-) {
-  
-  stop(
-    "FINAL ERROR: Atlas does not contain exactly 20,000 cells."
-  )
-}
-
-if (
-  length(
-    unique(
-      as.character(
-        Idents(atlas_sketch)
-      )
-    )
-  ) != 17
-) {
-  
-  stop(
-    "FINAL ERROR: Atlas does not contain exactly 17 clusters."
-  )
-}
-
-if (
-  nrow(final_annotation) != 17
-) {
-  
-  stop(
-    "FINAL ERROR: Final annotation table does not contain 17 clusters."
-  )
-}
-
-if (
-  any(
-    is.na(
-      atlas_sketch$Final_CellType
-    )
-  )
-) {
-  
-  stop(
-    "FINAL ERROR: Missing cell-type annotations detected."
-  )
-}
-
-cat(
-  "============================================================\n"
-)
-
-cat(
-  "✓ PHASE 3 SCRIPT 02 — SECTIONS 17–24 COMPLETE\n"
-)
-
-cat(
-  "============================================================\n\n"
-)
-
-cat(
-  "Atlas sketch cells:",
+message(
+  "\n============================================================\n",
+  "PHASE 3 SCRIPT 02 COMPLETE\n",
+  "============================================================\n",
+  "\nFinal atlas:\n",
+  final_output_file,
+  "\n\nCells: ",
   ncol(atlas_sketch),
-  "\n"
-)
-
-cat(
-  "Clusters:",
-  length(
-    unique(
-      atlas_sketch$seurat_clusters
+  "\nGenes: ",
+  nrow(atlas_sketch),
+  "\nClusters: ",
+  n_atlas_clusters,
+  "\nAnnotated clusters: ",
+  n_distinct(
+    atlas_sketch$Atlas_Cluster
+  ),
+  "\nNA cell-type labels: ",
+  sum(
+    is.na(
+      atlas_sketch$Final_Cell_Type
     )
   ),
-  "\n"
+  "\n\nFinal cell-type counts:\n"
 )
 
-cat(
-  "Final cell types:",
-  length(
-    unique(
-      atlas_sketch$Final_CellType
-    )
-  ),
-  "\n"
+print(
+  final_annotation_summary
 )
 
-cat(
-  "Clinical states:",
-  length(
-    unique(
-      atlas_sketch$Phase
-    )
-  ),
-  "\n"
+message(
+  "\n============================================================\n"
 )
-
-cat(
-  "Donors:",
-  length(
-    unique(
-      atlas_sketch$Donor
-    )
-  ),
-  "\n"
-)
-
-cat(
-  "Samples:",
-  length(
-    unique(
-      atlas_sketch$GSM
-    )
-  ),
-  "\n\n"
-)
-
-cat(
-  "✓ Final manual annotation complete\n",
-  "✓ Cell-level labels propagated\n",
-  "✓ Annotation confidence recorded\n",
-  "✓ Final annotated atlas checkpoint saved\n\n"
-)
-
-cat(
-  "Final checkpoint:\n",
-  "  results/rds_objects/phase3_atlas_sketch_final_annotation.rds\n"
-)
-
-cat(
-  "============================================================\n"
-)
-
