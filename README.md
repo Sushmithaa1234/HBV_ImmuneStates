@@ -16,11 +16,11 @@ This study investigates intrahepatic immune cell populations across the HBV dise
 
 | Clinical State | Abbr. | N | Description |
 |---|---|---|---|
-| Healthy/Seronegative | **NL** | 6 | Anti-HBc antibody negative |
-| Immunotolerant | **IT** | 6 | High viral load, minimal inflammation |
+| Normal Liver | **NL** | 6 | Anti-HBc antibody negative |
+| Immune Tolerant | **IT** | 6 | High viral load, minimal inflammation |
 | Immune Active | **IA** | 5 | Active viral replication, inflammation |
-| Anti-HBe Seroconversion | **AR** | 3 | Transitional immune phase |
-| Anti-HBc Seroconversion | **AC** | 3 | Resolved/chronic inactive state |
+| Acute Resolved | **AR** | 3 | Transitional immune phase |
+| Asymptomatic Carrier | **AC** | 3 | Resolved/chronic inactive state |
 
 ---
 
