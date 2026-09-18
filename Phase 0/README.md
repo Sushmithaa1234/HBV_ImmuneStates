@@ -2,278 +2,540 @@
 
 ## Overview
 
-**Goal:** Establish a verified, complete sample inventory before committing to downstream analysis. This phase confirms data provenance, validates cohort structure, verifies metadata integrity, and flags technical considerations without performing any filtering, normalization, or biological analysis.
+**Goal:** Establish a verified, complete sample inventory before committing to downstream analysis. This phase confirms data provenance, validates cohort structure, verifies metadata integrity, and documents technical characteristics without performing cell filtering, normalization, batch correction, or biological analysis.
 
-**Dataset:** GEO Accession **GSE182159** — Single-cell RNA-seq of liver biopsies from individuals with chronic hepatitis B infection
+**Dataset:** GEO Accession **GSE182159** — Single-cell RNA-seq study of liver and peripheral immune cells associated with hepatitis B virus (HBV) infection.
 
-**Scope:** 23 liver biopsy samples (1 per donor) representing 5 distinct HBV clinical states
+**Scope:** **23 liver biopsy samples from 23 unique donors**, representing 5 clinical-state labels present in the GEO metadata.
 
----
-
-## Workflow
-
-1. **Download & Verify Files**
-   - Downloaded 23 liver samples from GSE182159
-   - Extracted expression matrices from raw count files
-   - Confirmed file integrity
-
-2. **Extract Official Metadata**
-   - Retrieved sample metadata from GEO Series Matrix
-   - Matched downloaded GSM IDs to official GEO annotations
-   - Verified tissue type, donor IDs, and clinical classifications
-
-3. **Calculate Sample-Level Statistics**
-   - Gene count per sample
-   - Cell count per sample
-   - Per-cell gene detection and expression distribution
-
-4. **Validate Cohort Structure**
-   - Confirmed 1 sample per donor (no duplicates)
-   - Verified clinical state assignments
-   - Confirmed all samples are liver tissue
-
-5. **Identify Technical Characteristics**
-   - Sequencing platform & instrument
-   - Library preparation metadata
-   - Sample-level quality indicators
-
-6. **Flag Samples for Consideration**
-   - Applied QC flags based on cell recovery and transcriptomic complexity
-   - Flagged but did NOT remove any samples
+**Total liver cells represented in the downloaded matrices:** **106,592**
 
 ---
 
-## Results Summary
+## Phase 0 Principles
 
-### Verified Cohort Structure
+Phase 0 is a **provenance and data-integrity audit**, not a biological analysis or quality-control filtering stage.
 
-| Clinical State | Classification | N Samples | N Donors | Total Cells | Median Cells/Sample |
-|---|---|---|---|---|---|
-| **NL** | Healthy/Seronegative | 6 | 6 | 23,619 | 4,488 |
-| **IT** | Immunotolerant | 6 | 6 | 18,227 | 4,048 |
-| **IA** | Immune Active | 5 | 5 | 33,368 | 6,069 |
-| **AR** | Anti-HBe Seroconversion | 3 | 3 | 19,527 | 6,070 |
-| **AC** | Anti-HBc Seroconversion | 3 | 3 | 13,666 | 4,122 |
-| **TOTAL** | | **23** | **23** | **108,407** | — |
+The following principles were applied:
 
-**Key Validations:**
-- ✅ 23 samples (expected: 23)
-- ✅ 23 unique donors (1 sample per donor)
-- ✅ All samples are liver tissue
-- ✅ Clinical state distribution matches GEO metadata
+* GEO sample metadata were treated as the authoritative source for sample identifiers, donor identifiers, tissue, and clinical-state labels.
+* Clinical-state labels were preserved exactly as provided by GEO.
+* No cells or samples were removed.
+* No QC thresholds were used to determine inclusion/exclusion.
+* No normalization was performed because the downloaded matrices are already processed expression data.
+* No batch correction was performed.
+* No clustering, cell-type annotation, differential expression, or other biological analysis was performed.
+* Raw count matrices were not assumed to be available.
+* Descriptive matrix statistics were recorded without using them to make downstream filtering decisions.
 
 ---
 
-### Technical Metadata
+# Workflow
 
-All 23 samples share consistent technical characteristics:
+## 1. Identify and Verify Downloaded Files
 
-| Parameter | Value |
-|---|---|
-| **Platform** | GPL20301 (10x Genomics Chromium v2/v3) |
-| **Instrument** | Illumina HiSeq 4000 |
-| **Library Strategy** | RNA-Seq |
-| **Library Source** | transcriptomic |
-| **Library Selection** | cDNA |
-| **Genes in Reference Matrix** | 24,452 |
+* Identified liver expression matrices within `Data/Raw/`.
+* Confirmed that **23 liver expression files** were present.
+* Extracted GSM accession identifiers from filenames.
+* Confirmed that all 23 GSM identifiers were unique.
+
+**Result:** 23/23 expected liver samples detected.
 
 ---
 
-### Sample-Level Quality Metrics
+## 2. Retrieve Official GEO Metadata
 
-#### Cell Recovery
+GEO metadata were retrieved programmatically using the **GEOquery** R package from the GSE182159 Series Matrix.
 
-| Metric | Value |
-|---|---|
-| Total cells across all samples | 108,407 |
-| Mean cells per sample | 4,713 |
-| Median cells per sample | 4,048 |
-| Range | 66 – 10,164 cells |
+The following metadata were extracted:
 
-#### Transcriptomic Complexity (Genes Detected per Cell)
+* GSM accession
+* Donor identifier
+* Clinical-state label (`Stage:ch1`)
+* Tissue (`tissue:ch1`)
+* Platform
+* Instrument
+* Library selection
+* Library source
+* Library strategy
 
-| Metric | Value |
-|---|---|
-| Median (across all samples) | 1,194 genes/cell |
-| Mean (across all samples) | 1,158 genes/cell |
-| Range | 674.5 – 1,546 genes/cell |
-
-#### Expression Intensity (UMI counts per cell)
-
-| Metric | Value |
-|---|---|
-| Median (across all samples) | 2,314 counts/cell |
-| Mean (across all samples) | 2,194 counts/cell |
-| Range | 1,663 – 2,674 counts/cell |
+Downloaded files were matched against the GEO metadata using their GSM accession identifiers.
 
 ---
 
-### Sample QC Flags
+## 3. Validate Sample and Donor Structure
 
-Samples were assigned QC flags based on cell recovery and transcriptomic complexity. **No samples were removed; flags serve as transparency markers for downstream decisions.**
+The downloaded matrices and GEO metadata were cross-checked in both directions:
 
-| QC Flag | Definition | N Samples | Samples |
-|---|---|---|---|
-| **PASS** | Median genes/cell ≥ 900 | 18 | Standard QC baseline |
-| **LOWER_COMPLEXITY** | Median genes/cell 700–899 | 3 | GSM5519487, GSM5519488, GSM5519510 |
-| **LOW_COMPLEXITY** | Median genes/cell < 700 | 2 | GSM5519486, GSM5519499 |
-| **MAJOR_OUTLIER** | Cell count < 200 | 1 | GSM5519491 (66 cells) |
+* Every downloaded GSM had a corresponding GEO liver sample.
+* Every GEO liver sample had a corresponding downloaded matrix.
+* GSM identifiers were unique.
+* Donor identifiers were unique.
+* All 23 samples were annotated as **Liver**.
+* No donor, tissue, or clinical-state metadata were missing.
 
-**Flagged Sample Details:**
+**Result:**
 
-- **GSM5519491 (P190902, IT):** 66 cells — **MAJOR_OUTLIER**
-  - Likely failed capture or processing error
-  - Insufficient cell representation for reliable analysis
-  - Recommendation: Exclude from downstream analysis
-  
-- **GSM5519486 (D529351, NL), GSM5519499 (P191028, IA):** LOW_COMPLEXITY
-  - Lower gene detection may reflect true biological state or technical factors
-  - Retain in analysis but monitor in QC steps
-  
-- **GSM5519487 (D529354, NL), GSM5519488 (D529409, NL), GSM5519510 (P191210, AC):** LOWER_COMPLEXITY
-  - Borderline complexity; acceptable for inclusion with caution
+* **23 liver samples**
+* **23 unique donors**
+* **1 liver sample per donor**
+* **100% bidirectional GSM matching**
+* **100% liver-tissue concordance**
 
 ---
 
-### Sample Metadata Table
+## 4. Clinical-State Composition
 
-| GSM | Donor | Phase | Cells | Median Genes/Cell | Mean Expression | QC Flag |
-|---|---|---|---|---|---|---|
-| GSM5519469 | P190604 | IT | 3,085 | 1,278 | 2,360 | PASS |
-| GSM5519471 | P190326 | IT | 1,379 | 843 | 2,130 | LOWER_COMPLEXITY |
-| GSM5519472 | P190402 | IT | 7,110 | 1,464 | 2,539 | PASS |
-| GSM5519475 | P190716 | AR | 3,460 | 1,091 | 2,217 | PASS |
-| GSM5519477 | P190719 | IA | 3,006 | 920 | 2,033 | PASS |
-| GSM5519483 | Dhc570 | NL | 4,243 | 1,194 | 2,294 | PASS |
-| GSM5519484 | D528848 | NL | 4,733 | 1,171 | 2,297 | PASS |
-| GSM5519485 | D529074 | NL | 5,956 | 1,193 | 2,246 | PASS |
-| GSM5519486 | D529351 | NL | 690 | 675 | 1,836 | LOW_COMPLEXITY |
-| GSM5519487 | D529354 | NL | 5,233 | 850 | 2,070 | LOWER_COMPLEXITY |
-| GSM5519488 | D529409 | NL | 3,364 | 729 | 1,825 | LOWER_COMPLEXITY |
-| GSM5519491 | P190902 | IT | 66 | 644 | 1,682 | **MAJOR_OUTLIER** |
-| GSM5519494 | P190910 | IT | 2,693 | 1,546 | 2,665 | PASS |
-| GSM5519495 | P190808 | IT | 5,168 | 1,527 | 2,572 | PASS |
-| GSM5519496 | P190801 | IA | 6,069 | 1,277 | 2,393 | PASS |
-| GSM5519497 | P190911 | IA | 9,082 | 1,307 | 2,464 | PASS |
-| GSM5519499 | P191028 | IA | 8,062 | 685 | 1,823 | LOW_COMPLEXITY |
-| GSM5519502 | P191112 | IA | 6,070 | 1,430 | 2,537 | PASS |
-| GSM5519504 | P191008 | AR | 10,164 | 1,008 | 2,174 | PASS |
-| GSM5519506 | P191126 | AC | 3,293 | 1,426 | 2,484 | PASS |
-| GSM5519508 | P191127 | AC | 6,625 | 1,423 | 2,532 | PASS |
-| GSM5519510 | P191210 | AC | 2,919 | 826 | 1,980 | LOWER_COMPLEXITY |
-| GSM5519512 | P191217 | AR | 4,122 | 1,339 | 2,428 | PASS |
+The clinical-state labels were taken directly from the GEO `Stage:ch1` metadata.
+
+| GEO Label | Clinical Interpretation         | N Samples | N Donors |
+| --------- | ------------------------------- | --------: | -------: |
+| **AC**    | Asymptomatic Carrier*           |         3 |        3 |
+| **AR**    | Acute Resolved / Acute Recovery |         3 |        3 |
+| **IA**    | Immune Active                   |         5 |        5 |
+| **IT**    | Immune Tolerant                 |         6 |        6 |
+| **NL**    | Normal Liver                    |         6 |        6 |
+| **TOTAL** |                                 |    **23** |   **23** |
+
+*The GEO metadata use the label **AC**. Subsequent literature may harmonize the corresponding individuals with a chronic-resolved (`CR`) clinical group. **Phase 0 preserves the original GEO label and does not perform this harmonization.**
+
+The three GEO `AC` samples are:
+
+* GSM5519506 — P191126
+* GSM5519508 — P191127
+* GSM5519510 — P191210
+
+Any future derived clinical grouping will be explicitly documented as a derived variable rather than overwriting the source metadata.
 
 ---
 
-## Key Findings & Observations
+# Clinical Context
 
-### 1. Cohort Completeness ✅
-- All 23 expected liver samples present and verified
-- Complete clinical state information for all samples
-- No missing donor IDs or tissue annotations
+The five labels do not represent a simple linear disease-progression trajectory.
 
-### 2. Sample Quality Profile
-- **Majority of samples (18/23, 78%) pass standard QC thresholds**
-- Cell recovery ranges from 66 – 10,164 cells (median: 4,048)
-- Transcriptomic complexity consistent across clinical states (median: 1,194 genes/cell)
-- No strong technical confounds with clinical state apparent
+They represent distinct clinical contexts associated with HBV infection, resolution, or a normal liver reference population.
 
-### 3. Clinical State Representation
-- **Well-balanced cohort** with sufficient samples per state (NL, IT, IA, AR, AC all n ≥ 3)
-- IA state has highest cell recovery (33,368 cells across 5 samples)
-- IT and AR states have adequate representation for cross-state comparison
-- AC state (n=3) will be powered for within-state analyses
+Broadly:
 
-### 4. Critical Sample — GSM5519491
-- **P190902 (IT phase) — 66 cells**
-- Represents a major deviation from expected cell recovery (expected: ~4,000–6,000)
-- Likely indicates failed capture, processing error, or extreme cellularity loss
-- **Recommendation:** Exclude from Phase 2 data loading and all downstream analyses
+* **IT — Immune Tolerant:** chronic HBV infection characterized in classical clinical frameworks by high viral replication with relatively limited immune-mediated liver inflammation.
+* **IA — Immune Active:** HBV-associated immune-active disease with evidence of active hepatic inflammation and increased ALT and/or viral replication depending on the clinical context.
+* **AR — Acute Resolved/Acute Recovery:** individuals associated with acute HBV infection that subsequently resolved.
+* **AC — Asymptomatic Carrier:** the clinical label used in the GEO metadata for three individuals. The terminology has subsequently been represented differently in some literature, including classification as chronic resolved (`CR`).
+* **NL — Normal Liver:** HBV-free/normal liver reference samples.
 
-### 5. Technical Consistency
-- No platform/instrument/library variation (all 10x Chromium v2/v3 → HiSeq 4000)
-- Eliminates batch effects arising from technical heterogeneity
-- Enables direct biological interpretation of state-level differences
+Clinical-state interpretation should therefore be based on the original study's clinical metadata and definitions rather than treating the five labels as sequential stages.
+
+Important clinical variables underlying HBV disease-state classification can include combinations of:
+
+* HBsAg status
+* HBeAg status
+* HBV DNA level
+* ALT
+* Evidence of hepatic inflammation
+* Liver histology
+* Disease/resolution history
+
+Phase 0 does not reconstruct or alter these clinical classifications. It records the source labels for subsequent analysis.
 
 ---
 
-## Deliverables
+# Expression Matrix Characteristics
+
+Each downloaded liver matrix contains:
+
+* **24,452 genes**
+* Sample-specific numbers of cells
+* Numeric expression values
+* No duplicated gene identifiers
+* No duplicated cell identifiers
+* No negative expression values detected
+* No missing/non-finite expression values detected
+
+The matrices were successfully parsed as space-delimited expression matrices with genes as rows and cells as columns.
+
+---
+
+## Data Representation
+
+The downloaded matrices are **processed log-normalized expression data**, not raw UMI count matrices.
+
+The data are documented by GEO as:
+
+> **log-counts-per-10,000**
+
+Therefore:
+
+* `colSums(expression_matrix)` was **not interpreted as total UMI counts**.
+* Per-cell nonzero gene counts were used only as a descriptive measure of **genes detected per cell**.
+* Raw-count-dependent assumptions were not made during Phase 0.
+* No additional normalization was performed.
+
+**Raw count matrices:** Not available in the downloaded GEO supplementary data.
+
+This distinction is important for downstream methodological choices because several standard scRNA-seq workflows assume access to raw count data.
+
+---
+
+# Cell Recovery
+
+The downloaded matrices contain a total of:
+
+**106,592 liver cells**
+
+This total was obtained directly by summing the cell counts across the 23 local expression matrices:
+
+```text
+sum(final_metadata$cells_in_matrix)
+[1] 106592
+```
+
+This independently reproduces the liver-cell total reported in subsequent analyses of GSE182159.
+
+### Cells per clinical state
+
+| GEO State | N Samples | Total Cells | Median Cells/Sample |
+| --------- | --------: | ----------: | ------------------: |
+| **NL**    |         6 |      24,219 |               4,488 |
+| **IT**    |         6 |      19,501 |               2,889 |
+| **IA**    |         5 |      32,289 |               6,070 |
+| **AR**    |         3 |      17,746 |               4,122 |
+| **AC**    |         3 |      12,837 |               3,293 |
+| **TOTAL** |    **23** | **106,592** |                   — |
+
+### Overall cell recovery
+
+| Metric              |           Value |
+| ------------------- | --------------: |
+| Total cells         |     **106,592** |
+| Mean cells/sample   |     **4,634.4** |
+| Median cells/sample |       **4,122** |
+| Range               | **66 – 10,164** |
+
+No samples were excluded based on these values during Phase 0.
+
+---
+
+# Transcriptomic Complexity
+
+Genes detected per cell were calculated descriptively as the number of genes with expression greater than zero in each cell.
+
+Because the matrices are processed log-normalized expression values, this metric is referred to as:
+
+> **genes detected per cell**
+
+rather than `nFeature_RNA` or raw-count-derived transcriptomic complexity.
+
+### Sample-level summary
+
+| Metric                                            |             Value |
+| ------------------------------------------------- | ----------------: |
+| Median of sample-level median genes detected/cell |         **1,193** |
+| Mean of sample-level median genes detected/cell   |       **1,123.7** |
+| Range of sample-level medians                     | **643.5 – 1,546** |
+
+These values are descriptive and were **not used to exclude samples in Phase 0**.
+
+---
+
+# Sample-Level Audit
+
+| GSM        | Donor   | GEO Phase |  Cells | Median Genes Detected/Cell | Mean Genes Detected/Cell |
+| ---------- | ------- | --------- | -----: | -------------------------: | -----------------------: |
+| GSM5519469 | P190604 | IT        |  3,085 |                      1,278 |                  1,438.6 |
+| GSM5519471 | P190326 | IT        |  1,379 |                        843 |                  1,157.4 |
+| GSM5519472 | P190402 | IT        |  7,110 |                      1,464 |                  1,540.9 |
+| GSM5519475 | P190716 | AR        |  3,460 |                      1,091 |                  1,105.3 |
+| GSM5519477 | P190719 | IA        |  3,006 |                        920 |                  1,027.1 |
+| GSM5519483 | Dhc570  | NL        |  4,243 |                      1,194 |                  1,207.8 |
+| GSM5519484 | D528848 | NL        |  4,733 |                      1,171 |                  1,194.0 |
+| GSM5519485 | D529074 | NL        |  5,956 |                      1,193 |                  1,268.1 |
+| GSM5519486 | D529351 | NL        |    690 |                      674.5 |                    791.0 |
+| GSM5519487 | D529354 | NL        |  5,233 |                        850 |                    945.0 |
+| GSM5519488 | D529409 | NL        |  3,364 |                        729 |                    813.2 |
+| GSM5519491 | P190902 | IT        |     66 |                      643.5 |                    656.5 |
+| GSM5519494 | P190910 | IT        |  2,693 |                      1,546 |                  1,625.3 |
+| GSM5519495 | P190808 | IT        |  5,168 |                      1,527 |                  1,547.7 |
+| GSM5519496 | P190801 | IA        |  6,069 |                      1,277 |                  1,318.9 |
+| GSM5519497 | P190911 | IA        |  9,082 |                      1,307 |                  1,352.8 |
+| GSM5519499 | P191028 | IA        |  8,062 |                        685 |                    745.1 |
+| GSM5519502 | P191112 | IA        |  6,070 |                      1,430 |                  1,451.4 |
+| GSM5519504 | P191008 | AR        | 10,164 |                      1,008 |                  1,058.4 |
+| GSM5519506 | P191126 | AC        |  3,293 |                      1,426 |                  1,449.4 |
+| GSM5519508 | P191127 | AC        |  6,625 |                      1,423 |                  1,438.6 |
+| GSM5519510 | P191210 | AC        |  2,919 |                        826 |                    893.4 |
+| GSM5519512 | P191217 | AR        |  4,122 |                      1,339 |                  1,369.2 |
+
+---
+
+# Technical Metadata
+
+All 23 liver samples share the following GEO technical metadata:
+
+| Parameter                     | Value                               |
+| ----------------------------- | ----------------------------------- |
+| **Platform**                  | GPL20301                            |
+| **Instrument**                | Illumina HiSeq 4000                 |
+| **Library Strategy**          | RNA-Seq                             |
+| **Library Selection**         | cDNA                                |
+| **Library Source**            | transcriptomic                      |
+| **Genes per matrix**          | 24,452                              |
+| **Expression representation** | Processed log-normalized expression |
+| **Normalization**             | log-counts-per-10,000               |
+| **Raw counts available**      | No                                  |
+
+No platform, instrument, library strategy, library selection, or library source variation was observed among the 23 downloaded liver samples.
+
+**Important:** technical metadata consistency does not demonstrate the absence of all batch effects. It only establishes that these particular recorded technical variables do not vary across the cohort.
+
+---
+
+# Samples Requiring Attention
+
+Phase 0 does **not** assign PASS/FAIL QC categories and does **not** exclude samples.
+
+However, descriptive inspection identifies samples that should receive attention during the formal downstream QC stage.
+
+### GSM5519491 — P190902 — IT
+
+* **66 cells**
+* Median genes detected/cell: **643.5**
+* This is substantially smaller than the other liver samples.
+* The sample should be explicitly evaluated during the formal QC stage.
+
+**Phase 0 decision:** Retain in the dataset.
+
+**Downstream decision:** Not predetermined here. Phase 1/2 QC must establish whether the sample should be excluded and document the rationale.
+
+### Lower-complexity samples
+
+Several samples have comparatively low sample-level median genes detected per cell, including:
+
+* GSM5519486 — NL — 674.5
+* GSM5519487 — NL — 850
+* GSM5519488 — NL — 729
+* GSM5519491 — IT — 643.5
+* GSM5519499 — IA — 685
+* GSM5519510 — AC — 826
+* GSM5519471 — IT — 843
+
+These observations are **not sufficient by themselves to justify sample exclusion**.
+
+Formal QC will consider cell-level distributions and other appropriate metrics before any filtering decisions are made.
+
+---
+
+# Key Findings
+
+## 1. Cohort Completeness
+
+* **23/23** expected liver samples were identified.
+* **23/23** downloaded samples matched GEO metadata.
+* **23/23** GEO liver samples had corresponding local matrices.
+* **23/23** donors were unique.
+* **23/23** samples were annotated as liver tissue.
+
+## 2. Matrix Integrity
+
+* Every matrix contains **24,452 genes**.
+* No duplicated gene identifiers were detected.
+* No duplicated cell identifiers were detected.
+* Expression matrices were successfully parsed as numeric data.
+* Expression values ranged from zero to positive values.
+* No missing or non-finite expression values were detected.
+
+## 3. Cell Count Validation
+
+The 23 local matrices contain exactly:
+
+**106,592 liver cells**
+
+This provides an independent consistency check against the published liver-cell cohort associated with GSE182159.
+
+## 4. Clinical-State Metadata
+
+The source GEO distribution is:
+
+```text
+AC = 3
+AR = 3
+IA = 5
+IT = 6
+NL = 6
+```
+
+No clinical-state labels were manually altered during Phase 0.
+
+## 5. Data Representation
+
+The downloaded matrices are **processed log-normalized expression data** rather than raw count matrices.
+
+Consequently, raw UMI-based metrics were not reconstructed or reported.
+
+## 6. Technical Consistency
+
+All samples share the same recorded:
+
+* Platform
+* Instrument
+* Library strategy
+* Library source
+* Library selection
+
+This reduces obvious technical heterogeneity in the recorded metadata, but does **not** establish that biological and technical variation are completely separable.
+
+---
+
+# What Phase 0 Did NOT Do
+
+Phase 0 deliberately did not perform:
+
+* Cell filtering
+* Sample exclusion
+* QC threshold-based removal
+* Normalization
+* Batch correction
+* Feature selection
+* Dimensionality reduction
+* Clustering
+* Cell-type annotation
+* Differential expression
+* Pathway analysis
+* Cell–cell communication analysis
+* Clinical-state differential testing
+* Biological interpretation
+
+These decisions belong to subsequent phases and must be justified according to the relevant analytical objective.
+
+---
+
+# Deliverables
 
 ### Data Files
-- ✅ `final_liver_sample_metadata.csv` — Verified metadata for all 23 samples (GEO-matched clinical phases, QC flags, per-sample statistics)
-- ✅ `phase0_sample_audit.csv` — Detailed cell/gene statistics for each sample
-- ✅ `phase0_phase_summary.csv` — Summary statistics grouped by clinical state
 
-### Quality Checkpoints
-- Sample-level audit complete: 23/23 samples verified
-- GEO metadata validation: 100% match (GSM IDs, donor IDs, clinical phases, tissue type)
-- QC flags assigned and documented
+* `results/tables/phase0_final_liver_sample_metadata.csv`
 
----
+  * GEO-verified sample metadata
+  * Donor identifiers
+  * Clinical-state labels
+  * Tissue and technical metadata
+  * Matrix-level descriptive statistics
 
-## Gate & Recommendations
+* `results/tables/phase0_expression_matrix_audit.csv`
 
-### ✅ Gate Status: PASS
-The cohort structure and metadata are validated and suitable for Phase 1 (Data Loading & QC).
+  * Per-sample matrix integrity and expression statistics
 
-### Recommendations for Downstream Analysis
+* `results/tables/phase0_geo_phase_summary.csv`
 
-1. **GSM5519491 (P190902, IT):** EXCLUDE from Phase 2 onward
-   - Insufficient cell recovery compromises representativeness
-   - Retains IT representation (5 other IT samples remain)
+  * Sample and cell summaries by GEO clinical-state label
 
-2. **Flagged samples (LOWER_COMPLEXITY, LOW_COMPLEXITY):** RETAIN with monitoring
-   - Include in Phase 2–3 analysis
-   - Apply standard QC thresholds during filtering
-   - Monitor during clustering to ensure no systematic artifacts
+### Figures
 
-3. **Final expected sample count for Phase 2:** 22 samples (excluding GSM5519491)
-   - NL: 6, IT: 5, IA: 5, AR: 3, AC: 3
+* `results/figures/phase0_cells_per_sample.png`
+* `results/figures/phase0_median_genes_detected.png`
+
+### Code
+
+* `code/phase_0_pre-analysis audit.R`
 
 ---
 
-## Technical Notes
+# Quality-Control Checkpoint
 
-### Data Source
-- **Accession:** GSE182159
-- **Tissue:** Liver biopsies (curated from multi-tissue dataset)
-- **Citation:** GEO Series GSE182159
-- **Metadata:** Retrieved via GEOquery R package from official GEO Series Matrix
+### Phase 0 Status: **PASS**
 
-### QC Thresholds Applied (Phase 0 only)
-- Cell count threshold for MAJOR_OUTLIER flag: < 200 cells
-- Gene complexity thresholds (informational):
-  - PASS: ≥ 900 median genes/cell
-  - LOWER_COMPLEXITY: 700–899 median genes/cell
-  - LOW_COMPLEXITY: < 700 median genes/cell
+The dataset passed the Phase 0 provenance and integrity audit:
 
-*Note: These thresholds are for flagging/reporting. Final QC filtering occurs in Phase 2 (Data Loading & QC).*
+* **23 liver samples verified**
+* **23 unique donors verified**
+* **106,592 liver cells verified**
+* **24,452 genes per matrix verified**
+* **GEO metadata matched**
+* **Clinical-state labels preserved**
+* **Matrix integrity verified**
+* **Processed-data representation documented**
+* **No cells or samples filtered**
+
+### Important downstream consideration
+
+**GSM5519491 (P190902, IT) contains only 66 cells and requires formal evaluation during downstream QC.**
+
+Phase 0 does **not** pre-commit to its exclusion.
 
 ---
 
-## File Structure
+# Technical Notes
 
-```
+## Data Source
+
+**GEO Accession:** GSE182159
+
+**Tissue analyzed:** Liver
+
+**Number of liver donors:** 23
+
+**Number of liver samples:** 23
+
+**Total liver cells:** 106,592
+
+**Genes per matrix:** 24,452
+
+**Metadata source:** GEO Series Matrix retrieved programmatically using GEOquery.
+
+## Expression Data
+
+The downloaded supplementary matrices represent processed expression values normalized as log-counts-per-10,000.
+
+Raw sequencing/count data were not available for reconstruction of raw UMI counts.
+
+Therefore, Phase 0 reports **genes detected per cell** rather than raw-count-derived UMI metrics.
+
+## Clinical Metadata Provenance
+
+Clinical-state labels in the Phase 0 metadata correspond directly to the GEO `Stage:ch1` field.
+
+No manual relabeling was performed.
+
+The `AC` label is retained exactly as supplied by GEO. Its terminology and relationship to the chronic-resolved (`CR`) terminology used in subsequent literature will be documented separately and, if required for downstream comparisons, represented as an explicitly derived clinical variable.
+
+---
+
+# File Structure
+
+```text
 Phase_0_PreAnalysis/
-├── README.md (this file)
+├── README.md
 ├── code/
 │   └── phase_0_pre-analysis audit.R
 ├── results/
 │   ├── tables/
-│   │   ├── final_liver_sample_metadata.csv
-│   │   ├── phase0_sample_audit.csv
-│   │   └── phase0_phase_summary.csv
+│   │   ├── phase0_final_liver_sample_metadata.csv
+│   │   ├── phase0_expression_matrix_audit.csv
+│   │   └── phase0_geo_phase_summary.csv
+│   └── figures/
+│       ├── phase0_cells_per_sample.png
+│       └── phase0_median_genes_detected.png
 ```
 
 ---
 
-## Next Step
+# Next Step
 
-**Phase 1 (Setup):** Install required packages and dependencies  
+**Phase 1: Data Loading & Formal QC**
+
+Phase 1 will establish the appropriate downstream QC framework using the characteristics of the processed dataset documented here.
+
+Any cell- or sample-level exclusions will be determined and documented in that phase rather than retroactively imposed by Phase 0.
 
 ---
 
-**Phase 0 Complete** ✅
- 
-Samples Verified: 23  
-Gate Status: READY FOR PHASE 1
+## Phase 0 Complete ✅
+
+**Samples verified:** 23
+**Unique donors:** 23
+**Liver cells:** 106,592
+**Genes/matrix:** 24,452
+**GEO metadata match:** 23/23
+**Clinical labels altered:** No
+**Cells filtered:** No
+**Raw counts assumed:** No
+**Gate status:** **READY FOR PHASE 1**
