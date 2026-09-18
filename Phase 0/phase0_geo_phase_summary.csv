@@ -1,0 +1,6 @@
+phase,samples,total_cells,median_cells_per_sample,min_cells_per_sample,max_cells_per_sample,median_genes_detected_per_cell,min_sample_median_genes,max_sample_median_genes
+AC,3,12837,3293,2919,6625,1423,1423,1423
+AR,3,17746,4122,3460,10164,1091,1091,1091
+IA,5,32289,6070,3006,9082,1277,1277,1277
+IT,6,19501,2889,66,7110,1371,1371,1371
+NL,6,24219,4488,690,5956,1010.5,1010.5,1010.5
