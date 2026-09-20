@@ -1,0 +1,2 @@
+"Full_cells","Full_genes","Reference_cells","Atlas_clusters","Atlas_PCA_dimensions","Atlas_PCA_features","Clinical_states","Donors","Samples","PCA_dimensions","KNN_k","Cells_removed_in_Phase3","Original_data_layers_retained"
+106592,24452,20000,20,50,1999,5,23,23,50,30,0,23
