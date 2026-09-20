@@ -73,7 +73,13 @@ dir.create(
 )
 
 dir.create(
-  "results/phase3_annotation",
+  "results/tables",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  "results/figures",
   recursive = TRUE,
   showWarnings = FALSE
 )
@@ -231,19 +237,19 @@ cluster_phase_within_cluster <- cluster_phase_counts %>%
 
 write.csv(
   cluster_phase_counts,
-  "results/phase3_annotation/cluster_by_phase_counts.csv",
+  "results/tables/cluster_by_phase_counts.csv",
   row.names = FALSE
 )
 
 write.csv(
   cluster_phase_within_state,
-  "results/phase3_annotation/cluster_by_phase_within_state.csv",
+  "results/tables/cluster_by_phase_within_state.csv",
   row.names = FALSE
 )
 
 write.csv(
   cluster_phase_within_cluster,
-  "results/phase3_annotation/cluster_by_phase_within_cluster.csv",
+  "results/tables/cluster_by_phase_within_cluster.csv",
   row.names = FALSE
 )
 
@@ -275,13 +281,13 @@ cluster_donor_summary <- cluster_donor_counts %>%
 
 write.csv(
   cluster_donor_counts,
-  "results/phase3_annotation/cluster_by_donor_counts.csv",
+  "results/tables/cluster_by_donor_counts.csv",
   row.names = FALSE
 )
 
 write.csv(
   cluster_donor_summary,
-  "results/phase3_annotation/cluster_donor_summary.csv",
+  "results/tables/cluster_donor_summary.csv",
   row.names = FALSE
 )
 
@@ -313,13 +319,13 @@ cluster_sample_summary <- cluster_sample_counts %>%
 
 write.csv(
   cluster_sample_counts,
-  "results/phase3_annotation/cluster_by_sample_counts.csv",
+  "results/tables/cluster_by_sample_counts.csv",
   row.names = FALSE
 )
 
 write.csv(
   cluster_sample_summary,
-  "results/phase3_annotation/cluster_sample_summary.csv",
+  "results/tables/cluster_sample_summary.csv",
   row.names = FALSE
 )
 
@@ -356,7 +362,7 @@ cluster_markers <- cluster_markers %>%
 
 write.csv(
   cluster_markers,
-  "results/phase3_annotation/cluster_markers_all.csv",
+  "results/tables/cluster_markers_all.csv",
   row.names = FALSE
 )
 
@@ -377,7 +383,7 @@ top10_markers <- cluster_markers %>%
 
 write.csv(
   top10_markers,
-  "results/phase3_annotation/cluster_top10_markers.csv",
+  "results/tables/cluster_top10_markers.csv",
   row.names = FALSE
 )
 
@@ -578,7 +584,7 @@ print(marker_program_sizes)
 
 write.csv(
   marker_program_sizes,
-  "results/phase3_annotation/marker_program_gene_availability.csv",
+  "results/tables/marker_program_gene_availability.csv",
   row.names = FALSE
 )
 
@@ -746,7 +752,7 @@ heatmap_matrix[is.na(heatmap_matrix)] <- 0
 # ------------------------------------------------------------------------------
 
 pdf(
-  "results/phase3_annotation/canonical_marker_heatmap.pdf",
+  "results/tables/canonical_marker_heatmap.pdf",
   width = 14,
   height = 12
 )
@@ -878,7 +884,7 @@ marker_overlap_table_csv <- marker_overlap_table %>%
 
 write.csv(
   marker_overlap_table_csv,
-  "results/phase3_annotation/marker_program_top50_overlap.csv",
+  "results/tables/marker_program_top50_overlap.csv",
   row.names = FALSE
 )
 
@@ -967,7 +973,7 @@ if (length(module_score_columns) > 0) {
 
 write.csv(
   module_score_table,
-  "results/phase3_annotation/cluster_module_scores.csv",
+  "results/tables/cluster_module_scores.csv",
   row.names = FALSE
 )
 
@@ -1013,7 +1019,7 @@ if (length(module_score_columns) > 0) {
   
   write.csv(
     strongest_module_program,
-    "results/phase3_annotation/strongest_module_programs.csv",
+    "results/tables/strongest_module_programs.csv",
     row.names = FALSE
   )
   
@@ -1190,7 +1196,7 @@ singleR_results <- singleR_results[
 
 write.csv(
   singleR_results,
-  "results/phase3_annotation/singler_monaco_results.csv",
+  "results/tables/singler_monaco_results.csv",
   row.names = FALSE
 )
 
@@ -1226,7 +1232,7 @@ singleR_summary$Atlas_Cluster <-
 
 write.csv(
   singleR_summary,
-  "results/phase3_annotation/singler_summary.csv",
+  "results/tables/singler_summary.csv",
   row.names = FALSE
 )
 
@@ -1380,7 +1386,7 @@ if (
 
 write.csv(
   combined_annotation_evidence,
-  "results/phase3_annotation/combined_annotation_evidence.csv",
+  "results/tables/combined_annotation_evidence.csv",
   row.names = FALSE
 )
 
@@ -1495,7 +1501,7 @@ if (
 
 write.csv(
   manual_inspection_table,
-  "results/phase3_annotation/MANUAL_ANNOTATION_INSPECTION_TABLE.csv",
+  "results/tables/MANUAL_ANNOTATION_INSPECTION_TABLE.csv",
   row.names = FALSE
 )
 
@@ -1604,11 +1610,11 @@ message(
     collapse = ", "
   ),
   "\n\nReview:\n",
-  "  results/phase3_annotation/MANUAL_ANNOTATION_INSPECTION_TABLE.csv\n",
-  "  results/phase3_annotation/combined_annotation_evidence.csv\n",
-  "  results/phase3_annotation/cluster_top10_markers.csv\n",
-  "  results/phase3_annotation/canonical_marker_heatmap.pdf\n",
-  "  results/phase3_annotation/singler_summary.csv\n",
+  "  results/tables/MANUAL_ANNOTATION_INSPECTION_TABLE.csv\n",
+  "  results/tables/combined_annotation_evidence.csv\n",
+  "  results/tables/cluster_top10_markers.csv\n",
+  "  results/tables/canonical_marker_heatmap.pdf\n",
+  "  results/tables/singler_summary.csv\n",
   "\nFINAL LABELS HAVE NOT BEEN ASSIGNED.\n",
   "============================================================\n"
 )
@@ -2112,19 +2118,19 @@ final_cluster_annotation_summary <- atlas_sketch@meta.data %>%
 
 write.csv(
   final_cluster_labels,
-  "results/phase3_annotation/final_cluster_annotation_table.csv",
+  "results/tables/final_cluster_annotation_table.csv",
   row.names = FALSE
 )
 
 write.csv(
   final_annotation_summary,
-  "results/phase3_annotation/final_cell_type_summary.csv",
+  "results/tables/final_cell_type_summary.csv",
   row.names = FALSE
 )
 
 write.csv(
   final_cluster_annotation_summary,
-  "results/phase3_annotation/final_cluster_annotation_summary.csv",
+  "results/tables/final_cluster_annotation_summary.csv",
   row.names = FALSE
 )
 
@@ -2162,7 +2168,7 @@ print(final_validation_report)
 
 write.csv(
   final_validation_report,
-  "results/phase3_annotation/final_annotation_validation.csv",
+  "results/tables/final_annotation_validation.csv",
   row.names = FALSE
 )
 
