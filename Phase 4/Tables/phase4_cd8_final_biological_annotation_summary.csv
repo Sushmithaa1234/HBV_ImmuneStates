@@ -1,0 +1,17 @@
+"CD8_Cluster","CD8_Biological_Annotation","CD8_Biological_Class","CD8_Annotation_Confidence","Cells"
+"0","GZMK-associated memory-like CD8 T-cell","Conventional_CD8_associated","Moderate",8765
+"1","Memory-associated conventional T-cell","Conventional_T_associated","Moderate",6100
+"2","Activated/dysfunction-associated CD8 T-cell","Conventional_CD8_associated","High",5632
+"3","Immediate-early-response CD8-associated population","Transcriptional_program","High",3545
+"4","Activated/dysfunction-associated CD8 T-cell","Conventional_CD8_associated","High",3362
+"5","Activation/tissue-associated CD8-associated population","Conventional_CD8_associated","Moderate",3106
+"6","NK-like cytotoxic nonconventional T-cell population","Noncanonical_T_associated","High",1942
+"7","Gamma-delta-like cytotoxic T-cell population","GammaDelta_associated","High",1703
+"8","NK-like/nonconventional cytotoxic T-cell population","Noncanonical_T_associated","High",1530
+"9","NK-like cytotoxic population","NK_associated","High",1098
+"10","NK/gamma-delta-like nonconventional T-cell population","Noncanonical_T_associated","High",995
+"11","Gamma-delta-like T-cell population","GammaDelta_associated","High",958
+"12","Activated/dysfunction-associated tissue-associated CD8 T-cell","Conventional_CD8_associated","High",906
+"13","Gamma-delta-like cytotoxic T-cell population","GammaDelta_associated","High",778
+"14","NK-like cytotoxic population","NK_associated","High",544
+"15","Gamma-delta-like nonconventional T-cell population","GammaDelta_associated","High",317

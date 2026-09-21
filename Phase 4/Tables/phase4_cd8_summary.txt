@@ -1,0 +1,44 @@
+PHASE 4: CD8 T-CELL TRANSCRIPTIONAL STATE ANALYSIS
+
+Dataset:
+GSE182159 liver-only single-cell RNA-seq dataset.
+
+Input compartment: 41281 cells labelled CD8_T in Phase 3, representing 23 donors across 5 clinical states.
+
+Computational analysis:
+CD8-specific variable feature selection, PCA, nearest-neighbor graph
+construction, SNN clustering, UMAP visualization, exploratory cluster-marker
+identification, biological program scoring, lineage-panel assessment, and
+donor-representation diagnostics were performed using the existing processed
+log-CP10K expression representation.
+
+Biological characterization:
+Sixteen transcriptional clusters were identified within the Phase-3 CD8-labelled compartment.
+
+The cluster evidence supported:
+- conventional CD8-associated transcriptional populations;
+- activation/dysfunction-associated transcriptional states;
+- an immediate-early-response transcriptional program;
+- NK-like/noncanonical populations; and
+- gamma-delta-like/noncanonical T-cell populations.
+
+Interpretation boundary:
+Cluster-level composition is descriptive. Donor was retained as the biological
+replicate. Several clusters showed substantial donor concentration and were
+therefore not interpreted as cohort-wide clinical-state features.
+
+No clinical-state differential inference was performed in Phase 4.
+Formal donor-aware clinical-state inference is reserved for downstream analysis.
+
+No pathway enrichment or cell-cell communication analysis was performed in
+Phase 4. These analyses are reserved for later phases.
+
+Final interpretation:
+Phase 4 establishes a biologically adjudicated map of transcriptional
+heterogeneity within the Phase-3 CD8-labelled compartment for use in
+downstream donor-aware analysis.
+
+Important limitation:
+The biological annotations represent computational transcriptional
+characterization of the public dataset and are not experimentally validated
+cell identities or causal biological states.
