@@ -1,0 +1,13 @@
+"Evidence_Stream","Role","Interpretation_Rule","stringsAsFactors"
+"Top differential markers","Identify genes enriched within the computational cluster.","Descriptive evidence; not sufficient alone for a biological-state label.",FALSE
+"Core myeloid identity","Confirm myeloid identity rather than relying on cluster position.","Required for confident myeloid interpretation.",FALSE
+"Monocyte-associated program","Evaluate inflammatory/classical-monocyte-associated transcriptional evidence.","Supports monocyte-associated interpretation when coherent with other evidence.",FALSE
+"Macrophage-associated program","Evaluate macrophage-associated transcriptional evidence.","Supports macrophage-associated interpretation when coherent with other evidence.",FALSE
+"Antigen-presentation program","Evaluate antigen-presentation-associated transcriptional evidence.","Describes an antigen-presentation program and does not by itself define lineage.",FALSE
+"Interferon-response program","Evaluate interferon-stimulated transcriptional evidence.","Describes an interferon-response program and does not by itself define lineage.",FALSE
+"Phagolysosomal program","Evaluate lysosomal/phagocytic machinery.","Describes cellular machinery rather than an automatically named state.",FALSE
+"Complement/lipid-associated program","Evaluate complement/lipid-handling-associated programs.","Describes metabolic/complement-associated biology rather than a predetermined phenotype.",FALSE
+"Immediate-early activation program","Identify immediate-early transcriptional activation.","Treat as a transcriptional program, not necessarily a stable lineage/state.",FALSE
+"Non-myeloid contamination","Check whether apparent identity may instead reflect lymphoid/DC/neutrophil-associated signals.","Conflicting lineage evidence requires conservative annotation.",FALSE
+"Donor representation","Determine whether a cluster is broadly represented across donors or dominated by one donor.","Strong donor concentration limits cohort-level generalization.",FALSE
+"Clinical-state distribution","Describe distribution only; no clinical-state inference is made in Phase 5.","Clinical-state comparisons are reserved for donor-aware Phase 6 analysis.",FALSE
