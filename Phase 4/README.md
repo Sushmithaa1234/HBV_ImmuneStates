@@ -1,517 +1,596 @@
-# PHASE 4 — CD8 T-CELL ANALYSIS
+# PHASE 4 — CD8-LABELLED COMPARTMENT ANALYSIS
 
-**Objective:** Extract 44,229 CD8_T cells from the Phase 3 full dataset, characterize CD8 subpopulations through re-clustering, and map composition across HBV clinical states.
+**Objective:** Extract the Phase 3 CD8-labelled compartment from the full liver dataset, characterize its transcriptional heterogeneity through CD8-specific re-clustering and marker analysis, and perform biologically conservative annotation of the resulting populations.
 
-**Input:** 105,220 cells (Phase 3 final), subset to Transferred_Label = "CD8_T"  
-**Output:** 44,229 CD8 T cells with 17 clusters/states, clinical state composition, and marker validation
+**Input:** `results/rds_objects/phase3_final_full_dataset.rds`
 
----
-
-## SECTION 1-3: SETUP, DATA LOADING, AND EXTRACTION
-
-### 1.1-1.7: Project Setup
-- Seed: 12345
-- Input: `phase3_final_full_dataset.rds` (105,220 cells × 18,925 genes)
-- Output directories: results/rds_objects, results/tables, results/figures
-
-### 2.1-2.9: Phase 3 Final Dataset Validation
-
-**Integrity checkpoint:**
-- ✅ Seurat object confirmed (105,220 cells × 18,925 genes)
-- ✅ Required metadata present: GSM, Donor, Phase, Transferred_Label, Transfer_Confidence, Neighbour_Agreement, Label_Margin, Low_Confidence
-- ✅ 23 donors represented across 5 clinical phases (NL, IT, IA, AR, AC)
-- ✅ 0 missing Transferred_Label values
-- ✅ CD8_T cells: 44,229 (42% of full dataset)
-
-### 3.1-3.9: CD8 T-Cell Extraction
-
-**Extraction methodology:**
-- Filter: `Transferred_Label == "CD8_T"`
-- Result: 44,229 cells, 18,925 genes (full feature set retained)
-- Validation: All extracted cells confirmed CD8_T; provenance metadata (GSM, Donor, Phase, etc.) preserved
-
-**CD8 distribution by clinical phase:**
-
-| Phase | CD8 Count | % of Phase Total |
-|-------|-----------|-----------------|
-| AC | 5,670 | 44.4% |
-| AR | 10,790 | 62.0% |
-| IA | 15,969 | 50.2% |
-| IT | 5,933 | 30.7% |
-| NL | 5,867 | 24.6% |
-| **TOTAL** | **44,229** | **42.0%** |
+**Output:** 41,281 CD8-labelled cells, 16 computational clusters, and 16 cluster-level biological annotations across 23 donors and 5 GEO-defined clinical states.
 
 ---
 
-## SECTION 4: CD8 QC CHARACTERIZATION
+## SCIENTIFIC SCOPE
 
-### 4.1-4.9: QC Metrics & Phase-Specific Profiles
+Phase 4 characterizes transcriptional heterogeneity within the cells labelled CD8_T by the Phase 3 global atlas.
 
-**Overall CD8 QC Summary:**
+The analysis is intentionally framed as **CD8-labelled compartment characterization**, rather than assuming that every transferred CD8_T cell represents a conventional CD8 T-cell state.
 
-| Metric | Median | Mean | Min | Max |
-|--------|--------|------|-----|-----|
-| nCount_RNA | **2,246** | 2,224 | 1,105 | 4,080 |
-| nFeature_RNA | **1,099** | 1,116 | 455 | 4,125 |
-| percent.mt | **1.80%** | 1.84% | 0% | 4.39% |
-| RNA_complexity | **0.491** | 0.488 | 0.349 | 1.011 |
+### Phase 4 is designed to answer
 
+- What transcriptional populations are present within the Phase 3 CD8-labelled compartment?
+- Which marker programs characterize those populations?
+- Which populations show conventional CD8-associated versus nonconventional lineage-associated signatures?
+- How broadly are the identified populations represented across donors?
+- What biological annotations can be supported by the available transcriptional evidence?
 
+### Phase 4 does NOT attempt to
 
-**QC by Clinical State:**
+- Infer clinical-state effects
+- Establish disease progression or trajectory
+- Make causal claims
+- Identify HBV-specific T-cell states
+- Claim definitive cellular lineage from a single marker
+- Classify populations as pathogenic or protective
+- Establish exhaustion as a functional state
+- Perform donor-level statistical inference between clinical states
+- Replace the Phase 3 global cell-type annotation
 
-| Phase | Cells | Median nCount | Median nFeature | Median %MT | Median Complexity |
-|-------|-------|---------------|-----------------|------------|-------------------|
-| NL | 5,867 | 2,162 | 1,063 | 1.71% | 0.483 |
-| IT | 5,933 | 2,208 | 1,089 | 1.79% | 0.489 |
-| IA | 15,969 | 2,294 | 1,109 | 1.82% | 0.490 |
-| AR | 10,790 | 2,324 | 1,128 | 1.86% | 0.492 |
-| AC | 5,670 | 2,218 | 1,100 | 1.80% | 0.490 |
-
-**Transfer Confidence (from Phase 3):**
-- High-confidence CD8 cells: 37,523 (84.8%)
-- Low-confidence CD8 cells: 6,706 (15.2%)
-- All cells retained for analysis
+**Note:** Clinical-state inference is reserved for the donor-aware analyses of later phases.
 
 ---
 
-## SECTION 5-8: EXPRESSION REPRESENTATION, HVG SELECTION, AND SCALING
+## 1. INPUT DATA AND INTEGRITY VALIDATION
 
-### 5.1-5.7: Normalized Expression Locked
+### 1.1 Project Setup
 
-**Expression layer:** RNA assay, "data" layer (log-normalized, scale factor 10,000)
-- No raw-count re-normalization performed (raw matrix unavailable in Phase 3 checkpoints)
-- Existing normalized representation retained and validated
-- All 44,229 cells × 18,925 genes present
+| Parameter | Value |
+|-----------|-------|
+| Input object | `results/rds_objects/phase3_final_full_dataset.rds` |
+| Total cells | 106,592 |
+| Total genes | 24,452 |
+| Donors/samples | 23 |
+| Seurat version | v5 |
+| Includes Phase 3 annotations | Yes |
 
-### 6.1-6.9: CD8-Specific Variable Feature Selection
+**Clinical-state labels:**
+- AC
+- AR
+- IA
+- IT
+- NL
 
-**HVG discovery:**
-- Method: variance-stabilizing transform (VST)
-- Features selected: **2,000 HVGs**
-- Assay: RNA, layer: data (normalized)
+The Phase 4 analysis preserves these GEO-defined labels and does not reinterpret them as a progression trajectory.
 
-**CD8 HVG Categories:**
+### 1.2 Phase 3 Integrity Check
 
-| Category | HVG Count | % |
-|----------|-----------|-----|
-| Other | 1,799 | 89.95% |
-| Cell_Cycle | 87 | 4.35% |
-| Stress_Immediate_Early | 82 | 4.10% |
-| TCR | 20 | 1.00% |
-| Ribosomal | 8 | 0.40% |
-| Mitochondrial | 4 | 0.20% |
-
-**Top stress/immediate-early HVGs:** TNF, EGR1, ATF3, FOS, JUN, DUSP1, HSPA1A, HSPA1B, PPP1R15A, NR4A1
-
-### 8.1-8.11: Scaling
-
-**Scaled feature set:** 2,000 locked CD8 HVGs
-- Z-score normalization applied
-- All 44,229 cells × 2,000 features finite
-- Row means ≈ 0 (max |mean|: <1e-6)
-- Row variances: 0.37–1.43 (healthy scaling)
+- ✅ Seurat object valid
+- ✅ 106,592 cells present
+- ✅ 24,452 genes present
+- ✅ 23 donors represented
+- ✅ 5 GEO-defined clinical states represented
+- ✅ Phase 3 cell-type annotations present
+- ✅ CD8_T population present
+- ✅ Provenance metadata retained
 
 ---
 
-## SECTION 9: PCA
+## 2. CD8-LABELLED COMPARTMENT EXTRACTION
 
-### 9.1-9.12: Principal Component Analysis
+### 2.1 Extraction Rule
 
-**PCA configuration:**
-- Dimensions: 50 PCs
-- Features: 2,000 locked CD8 HVGs
-- All 44,229 cells projected successfully
+Cells were extracted using the Phase 3 final global annotation:
 
-**Variance explained:**
+```
+Final_Cell_Type == "CD8_T"
+```
 
-| PC Range | Cumulative Variance |
-|----------|-------------------|
-| PC1-5 | 19.8% |
-| PC1-10 | 31.2% |
-| PC1-15 | 40.7% |
-| PC1-20 | **50.2%** |
-| PC1-30 | 63.4% |
-| PC1-50 | 79.1% |
+No additional biological filtering was applied at extraction.
 
-**Selection:** PC1-20 selected for downstream use (50.2% cumulative variance)
-
----
-
-## SECTION 10: NEAREST-NEIGHBOR GRAPH & CLUSTERING
-
-### 10.1-10.12: CD8 Clustering
-
-**Clustering parameters:**
-- Reduction: PCA, dimensions 1-20
-- Graph: RNA_snn (shared nearest neighbor)
-- k.param: 20 (k-nearest neighbors)
-- Resolution: **0.4** (moderate granularity)
-- Algorithm: 1 (Louvain)
-- Seed: 12345
-
-**Result: 17 CD8 clusters**
-
-| Cluster | Cell Count | % of CD8 | Biological Interpretation |
-|---------|-----------|---------|-------------------------|
-| 0 | 3,289 | 7.43% | CD8_Memory_GPR183 |
-| 1 | 2,594 | 5.86% | CD8_Naive_Memory |
-| 2 | 2,088 | 4.72% | CD8_PD1_Dysfunctional |
-| 3 | 1,045 | 2.36% | NK_like |
-| 4 | 1,620 | 3.66% | CD8_Activated |
-| 5 | 1,537 | 3.47% | CD8_Immediate_Early_Stress |
-| 6 | 1,233 | 2.79% | CD8_Memory_P2RY8 |
-| 7 | 1,087 | 2.46% | GammaDelta_T_like |
-| 8 | 875 | 1.98% | NK_like |
-| 9 | 1,204 | 2.72% | Ig_Associated_Ambiguous |
-| 10 | 1,055 | 2.39% | Treg_like |
-| 11 | 766 | 1.73% | GammaDelta_NK_like_TRM |
-| 12 | 1,129 | 2.55% | Cytotoxic_GammaDelta_like |
-| 13 | 441 | 0.997% | GammaDelta_Nonconventional |
-| 14 | 1,018 | 2.30% | GammaDelta_IL7R |
-| 15 | 1,413 | 3.19% | CD8_Cytotoxic_Effector |
-| 16 | 1,258 | 2.84% | NK_like_Nonconventional |
-
-
-
----
-
-## SECTION 11: UMAP VISUALIZATION
-
-**UMAP parameters:**
-- Reduction: PCA, dimensions 1-20
-- Seed: 12345
-- Neighbors: 30 (default)
-- Min.distance: 0.3 (default)
-
-**Outputs:**
-- `phase4_cd8_umap_clusters.png` — 17 clusters labeled
-- `phase4_cd8_umap_clinical_phase.png` — 5 clinical states colored
-
-
-
----
-
-## SECTION 12: CLUSTER MARKERS
-
-### 12.1-12.12: Marker Discovery
-
-**Method:** FindAllMarkers (Wilcoxon rank-sum)
-- only.pos = TRUE
-- min.pct = 0.25
-- logfc.threshold = 0.25
-- Significance threshold: p_val_adj < 0.05
-
-**Results:**
+### 2.2 Extraction Result
 
 | Metric | Value |
 |--------|-------|
-| Total positive marker rows (all clusters) | 12,847 |
-| Significant marker rows (p_adj < 0.05) | 7,356 |
-| Clusters with ≥1 sig. marker | 17/17 (100%) |
+| CD8-labelled cells | 41,281 |
+| Genes | 24,452 |
+| Donors | 23 |
+| Clinical states | 5 |
+| Computational clusters | 16 |
 
-**Top markers by cluster:**
-
-**Cluster 0 (CD8_Memory_GPR183):**
-- GPR183 (log2FC=1.49), LMNA, RGCC, PDCL3
-
-**Cluster 1 (CD8_Naive_Memory):**
-- SIT1 (log2FC=2.16), GIMAP1, TXNIP, GIMAP4
-
-**Cluster 2 (CD8_PD1_Dysfunctional):**
-- PDCD1/PD1 (log2FC=0.86, p<1e-53), CXCR4, RGS1, CD8A
-
-**Cluster 3 (NK_like):**
-- KIR3DL2 (log2FC=3.13), KLRF1, TYROBP, S1PR5
-
-**Cluster 4 (CD8_Activated):**
-- GEM (log2FC=3.34), LAYN, TNFRSF9/4-1BB, DUSP4
-
-**Cluster 5 (CD8_Immediate_Early_Stress):**
-- TNF (log2FC=2.91), EGR1, ATF3, HSPA1B, NR4A1
-
-**Cluster 6 (CD8_Memory_P2RY8):**
-- P2RY8 (log2FC=1.21), SUCO, GPCPD1, CAMK4
-
-**Cluster 7 (GammaDelta_T_like):**
-- TRBV12-2 (log2FC=8.29), TRDV1, TRGV4, KLRB1
-
-**Cluster 15 (CD8_Cytotoxic_Effector):**
-- PRSS23 (log2FC=5.53), FGFBP2, CX3CR1, ADGRG1, FCGR3A
+**Extraction integrity:**
+- ✅ Exact cell-ID correspondence
+- ✅ No unexpected cells introduced
+- ✅ No extracted cells lost through ID mismatch
+- ✅ Donor metadata preserved
+- ✅ Clinical-state metadata preserved
+- ✅ Phase 3 provenance preserved
 
 ---
 
-## SECTION 13: MARKER VALIDATION
+## 3. EXPRESSION REPRESENTATION
 
-### 13.1-13.7: Biological Marker Panels
+### 3.1 Expression Layer
 
-**Marker panels applied (genes present):**
+The Phase 3 dataset contains processed normalized expression rather than the original raw UMI count matrix. The Phase 4 analysis therefore uses the existing normalized expression representation.
 
-| Panel | Genes Present | Coverage |
-|-------|---------------|----------|
-| Conventional_T_CD8 | 6/6 | 100% |
-| Naive_Memory | 8/8 | 100% |
-| Cytotoxic | 9/9 | 100% |
-| NK | 9/9 | 100% |
-| GammaDelta_T | 10/10 | 100% |
-| Activation | 8/8 | 100% |
-| Dysfunction_Exhaustion | 9/9 | 100% |
-| CD4_Treg | 8/8 | 100% |
-| Proliferation | 5/5 | 100% |
+| Aspect | Value |
+|--------|-------|
+| Assay | RNA |
+| Data layers | Processed |
+| Expression format | log-CP10K |
+| Reverse transformation | No |
+| Re-normalization | No |
 
-**Total validation markers:** 72 genes, 100% present in dataset
+The existing normalized representation was retained as the starting point for CD8 analysis.
 
-**DotPlot output:** `phase4_cd8_marker_validation_dotplot.png`
-- Clusters stratify by marker signature
-- Dysfunction/exhaustion markers (PDCD1, TOX, TIGIT, CTLA4, HAVCR2) clear in Clusters 2, 10
-- Activation markers (TNFRSF9, DUSP4, CD69, TNF) strong in Clusters 4, 5
-- TCR/TCR-like gene expression segregates Clusters 7, 12, 13, 14
-- NK markers (KLRD1, NCR3) enriched in Clusters 3, 8, 16
-- Treg markers (FOXP3, IL2RA, CTLA4, ICOS) strong in Cluster 10
+### 3.2 Source-Layer Preservation
+
+Before downstream manipulation, the sample-specific expression layers were preserved.
+
+**Checkpoint:** `results/rds_objects/phase4_cd8_source_layers_preserved.rds`
 
 ---
 
-## SECTION 14: BIOLOGICAL ANNOTATION
+## 4. CD8-SPECIFIC DIMENSION REDUCTION AND CLUSTERING
 
-### 14.1-14.9: Cluster → CD8 State Mapping
+### 4.1 Highly Variable Features
 
-**Final 17 CD8 States:**
+| Parameter | Value |
+|-----------|-------|
+| HVGs selected | 2,000 |
+| Purpose | Scaling and PCA |
 
-| Cluster | CD8_State |
-|---------|-----------|
-| 0 | CD8_Memory_GPR183 |
-| 1 | CD8_Naive_Memory |
-| 2 | CD8_PD1_Dysfunctional |
-| 3 | NK_like |
-| 4 | CD8_Activated |
-| 5 | CD8_Immediate_Early_Stress |
-| 6 | CD8_Memory_P2RY8 |
-| 7 | GammaDelta_T_like |
-| 8 | NK_like |
-| 9 | Ig_Associated_Ambiguous |
-| 10 | Treg_like |
-| 11 | GammaDelta_NK_like_TRM |
-| 12 | Cytotoxic_GammaDelta_like |
-| 13 | GammaDelta_Nonconventional |
-| 14 | GammaDelta_IL7R |
-| 15 | CD8_Cytotoxic_Effector |
-| 16 | NK_like_Nonconventional |
+### 4.2 Scaling
+
+The 2,000 selected CD8 HVGs were scaled for dimensionality reduction. No biological filtering was performed on the basis of the scaled values.
+
+### 4.3 Principal Component Analysis
+
+| Parameter | Value |
+|-----------|-------|
+| Input features | 2,000 CD8 HVGs |
+| PCs calculated | 50 |
+| PCs for graph construction | PC1–PC20 |
+
+PCA was performed on the CD8-specific expression space.
 
 ---
 
-## SECTION 15: CD8 STATE COMPOSITION BY CLINICAL PHASE
+## 5. CD8-SPECIFIC NEIGHBOR GRAPH AND CLUSTERING
 
-### 15.1-15.11: Phase-Dependent CD8 Landscape
+### 5.1 Graph Construction
 
-**Global CD8 composition (all 44,229 cells):**
+| Parameter | Value |
+|-----------|-------|
+| Reduction | PCA |
+| Dimensions | PC1–PC20 |
+| k-value | 20 |
+| Nearest-neighbor graph | CD8_nn |
+| Shared-nearest-neighbor graph | CD8_snn |
 
-| CD8_State | Total Cells | % Overall |
-|-----------|------------|----------|
-| CD8_Memory_GPR183 | 10,057 | 22.7% |
-| CD8_Naive_Memory | 6,320 | 14.3% |
-| CD8_PD1_Dysfunctional | 6,597 | 14.9% |
-| NK_like | 3,633 | 8.22% |
-| CD8_Activated | 3,117 | 7.05% |
-| GammaDelta_T_like | 1,704 | 3.85% |
-| CD8_Immediate_Early_Stress | 2,695 | 6.09% |
-| CD8_Memory_P2RY8 | 1,784 | 4.03% |
-| Cytotoxic_GammaDelta_like | 918 | 2.08% |
-| GammaDelta_NK_like_TRM | 975 | 2.20% |
-| Treg_like | 1,307 | 2.95% |
-| CD8_Cytotoxic_Effector | 1,413 | 3.19% |
-| NK_like_Nonconventional | 1,202 | 2.72% |
-| GammaDelta_IL7R | 650 | 1.47% |
-| Ig_Associated_Ambiguous | 1,612 | 3.64% |
-| GammaDelta_Nonconventional | 825 | 1.86% |
+### 5.2 Clustering
 
-**Key insight:** Conventional CD8 states (Memory_GPR183, Naive, Dysfunctional, Activated) comprise 59.1% of CD8s; non-conventional (NK-like, γδ-like, Treg-like, Ig-associated) comprise 20.2%; remaining 20.7% miscellaneous subtypes.
+| Parameter | Value |
+|-----------|-------|
+| Graph | CD8_snn |
+| Resolution | 0.4 |
+| Algorithm | 1 (Louvain) |
+| Resulting clusters | 16 |
 
-### Phase-Specific Landscapes
+**Cluster sizes:**
 
-#### **NL (Normal Liver, n=5,867 CD8 cells)**
-Innate-biased, diverse immune state
+| Cluster | Cells |
+|---------|-------|
+| 0 | 8,765 |
+| 1 | 6,100 |
+| 2 | 5,632 |
+| 3 | 3,545 |
+| 4 | 3,362 |
+| 5 | 3,106 |
+| 6 | 1,942 |
+| 7 | 1,703 |
+| 8 | 1,530 |
+| 9 | 1,098 |
+| 10 | 995 |
+| 11 | 958 |
+| 12 | 906 |
+| 13 | 778 |
+| 14 | 544 |
+| 15 | 317 |
+| **Total** | **41,281** |
 
-| CD8_State | Cells | % within NL |
-|-----------|-------|----------|
-| Ig_Associated_Ambiguous | 1,602 | **27.3%** |
-| NK_like | 1,576 | **26.9%** |
-| CD8_PD1_Dysfunctional | 1,161 | 19.8% |
-| CD8_Memory_GPR183 | 744 | 12.7% |
-| CD8_Immediate_Early_Stress | 421 | 7.18% |
-
----
-
-#### **IT (Immune Tolerant, n=5,933 CD8 cells)**
-Skewed toward memory with innate enrichment
-
-| CD8_State | Cells | % within IT |
-|-----------|-------|----------|
-| CD8_Memory_GPR183 | 2,574 | **43.4%** |
-| NK_like | 1,330 | 22.4% |
-| CD8_Immediate_Early_Stress | 553 | 9.32% |
-| CD8_Memory_P2RY8 | 485 | 8.17% |
-| CD8_Activated | 162 | 2.73% |
+**Important:** These clusters represent computationally defined transcriptional populations. They are not automatically equivalent to stable biological cell states.
 
 ---
 
-#### **IA (Immune Active, n=15,969 CD8 cells)**
-Dysfunction and activation co-enriched
+## 6. UMAP
 
-| CD8_State | Cells | % within IA |
-|-----------|-------|----------|
-| **CD8_PD1_Dysfunctional** | **4,043** | **25.3%** |
-| **CD8_Activated** | **2,870** | **18.0%** |
-| CD8_Memory_GPR183 | 3,111 | 19.5% |
-| CD8_Immediate_Early_Stress | 1,319 | 8.26% |
-| CD8_Memory_P2RY8 | 1,240 | 7.77% |
-| Treg_like | 833 | 5.22% |
-| NK_like | 1,484 | 9.29% |
+A CD8-specific UMAP was generated from the CD8 PCA representation.
 
----
+| Parameter | Value |
+|-----------|-------|
+| Reduction | PCA |
+| Dimensions | PC1–PC20 |
+| Distance metric | Cosine (UWOT) |
+| Output file | `phase4_cd8_umap.png` |
 
-#### **AR (Anti-HBe Seroconversion, n=10,790 CD8 cells)**
-Naive/memory-dominated, activation-minimal
-
-| CD8_State | Cells | % within AR |
-|-----------|-------|----------|
-| **CD8_Naive_Memory** | **4,771** | **44.2%** |
-| CD8_Memory_GPR183 | 2,025 | 18.8% |
-| CD8_Immediate_Early_Stress | 441 | 4.09% |
-| CD8_Memory_P2RY8 | 694 | 6.43% |
-| Cytotoxic_GammaDelta_like | 593 | 5.50% |
-| GammaDelta_NK_like_TRM | 636 | 5.89% |
+UMAP is used for visualization of the transcriptional structure identified by PCA and graph-based clustering. UMAP coordinates are not treated as quantitative biological measurements.
 
 ---
 
-#### **AC (Anti-HBc Seroconversion/Resolved, n=5,670 CD8 cells)**
-Non-conventional population enrichment; conventional CD8 memory
+## 7. MARKER DISCOVERY
 
-| CD8_State | Cells | % within AC |
-|-----------|-------|----------|
-| **GammaDelta_T_like** | **1,695** | **29.9%** |
-| CD8_Memory_GPR183 | 1,203 | 21.2% |
-| NK_like | 482 | 8.50% |
-| CD8_Immediate_Early_Stress | 269 | 4.74% |
-| CD8_Memory_P2RY8 | 321 | 5.66% |
-| CD8_Naive_Memory | 990 | 17.5% |
+### 7.1 Cluster-Level Marker Analysis
 
-### Phase-Specific Summary Table
+| Parameter | Value |
+|-----------|-------|
+| Statistical method | Wilcoxon rank-sum test |
+| Purpose | Gene enrichment per cluster |
 
-| Phase | Dominant States |
-|-------|-----------------|
-| NL | NK-like (26.9%), Ig-Assoc (27.3%), CD8_PD1_Dysfunctional (19.8%) |
-| IT | CD8_Memory_GPR183 (43.4%), NK-like (22.4%), CD8_Immediate_Early_Stress (9.32%) |
-| IA | CD8_PD1_Dysfunctional (25.3%), CD8_Activated (18.0%), CD8_Memory_GPR183 (19.5%) |
-| AR | CD8_Naive_Memory (44.2%), CD8_Memory_GPR183 (18.8%), CD8_Memory_P2RY8 (6.43%) |
-| AC | GammaDelta_T_like (29.9%), CD8_Memory_GPR183 (21.2%), CD8_Naive_Memory (17.5%) |
+Marker analysis was exploratory and was not treated as donor-level clinical-state inference.
 
----
+### 7.2 Marker Interpretation
 
-## SECTION 16: FINAL BIOLOGICAL CHARACTERIZATION
+Marker evidence was evaluated together with:
 
-### 16.1-16.8: Selected CD8 State Markers & Pathway Themes
+- Lineage-associated gene panels
+- Transcriptional programs
+- Cluster-level expression patterns
+- Donor representation
+- Competing lineage evidence
 
-**7 conventional CD8 states selected for focused analysis:**
-1. CD8_Memory_GPR183 (10,057 cells)
-2. CD8_Naive_Memory (6,320 cells)
-3. CD8_PD1_Dysfunctional (6,597 cells)
-4. CD8_Activated (3,117 cells)
-5. CD8_Immediate_Early_Stress (2,695 cells)
-6. CD8_Memory_P2RY8 (1,784 cells)
-7. CD8_Cytotoxic_Effector (1,413 cells)
-
-**Top 15 markers per state (sample highlights):**
-
-**CD8_Memory_GPR183:** GPR183, LMNA, PDCL3, MT1X, RGCC, SDCBP
-
-**CD8_Naive_Memory:** SIT1, GIMAP1, GIMAP4, TXNIP, CD27
-
-**CD8_PD1_Dysfunctional:** PDCD1/PD1, CXCR4, RGS1, LEPROTL1, ISG15
-
-**CD8_Activated:** GEM, LAYN, TNFRSF9/4-1BB, DUSP4, DUSP16, CD200R1, ASB2
-
-**CD8_Immediate_Early_Stress:** TNF, EGR1, ATF3, NR4A1, HSPA1A, HSPA1B, PPP1R15A, FOS, FOSB
-
-**CD8_Memory_P2RY8:** P2RY8, SUCO, GPCPD1, CYP51A1, TGFBR3, CAMK4
-
-**CD8_Cytotoxic_Effector:** FGFBP2, CX3CR1, PRSS23, ADGRG1, FCGR3A
+**Critical principle:** No single gene was treated as sufficient evidence for a definitive biological identity.
 
 ---
 
-## FINAL CD8 OBJECT
+## 8. TRANSCRIPTIONAL PROGRAMS
 
-### Integrity Checkpoint ✅
+Programs examined across the CD8-labelled compartment:
+
+- Naive/Memory
+- Cytotoxic
+- Activation
+- Dysfunction-associated
+- Immediate-early response
+- NK-like
+- Nonconventional T-cell
+- Tissue-associated
+- Proliferation
+
+**Important:** These are transcriptional programs, not automatically mutually exclusive cell states. An immediate-early response program may represent a transient transcriptional response rather than a stable cellular identity. Dysfunction-associated expression is not interpreted as proof of functional exhaustion.
+
+---
+
+## 9. LINEAGE-ASSOCIATED EVIDENCE
+
+The following panels were used as supporting evidence.
+
+### Conventional T/CD8-associated
+`CD3D`, `CD3E`, `TRBC1`, `TRBC2`, `CD8A`, `CD8B`
+
+### NK-associated
+`NKG7`, `GNLY`, `KLRD1`, `KLRF1`, `KLRC1`, `KLRC2`, `TYROBP`, `FCER1G`, `NCR3`, `S1PR5`
+
+### Gamma-delta T-associated
+`TRDC`, `TRGC1`, `TRGC2`, `TRDV1`, `TRDV2`, `TRGV2`, `TRGV4`, `TRGV5`, `TRGV8`, `TRGV9`
+
+### Treg-associated
+`CD4`, `IL7R`, `FOXP3`, `IL2RA`, `CTLA4`, `TNFRSF4`, `TNFRSF18`, `ICOS`
+
+### B-cell-associated
+`CD79A`, `MS4A1`, `CD37`, `CD74`, `HLA-DRA`
+
+### Myeloid-associated
+`LYZ`, `S100A8`, `S100A9`, `FCGR3A`, `CTSD`
+
+**Note:** These panels are used as evidence for annotation, not as automated cell-type classifiers.
+
+---
+
+## 10. BIOLOGICAL ADJUDICATION
+
+Each computational cluster was evaluated using multiple evidence streams:
+
+- Cluster-level marker expression
+- Lineage-associated panels
+- Transcriptional programs
+- Competing lineage evidence
+- Donor representation
+- Degree of biological ambiguity
+
+**Principle:** Annotations were deliberately conservative. Terms such as "associated," "like," and "population" are used where the available transcriptomic evidence does not justify a definitive lineage or functional claim.
+
+---
+
+## 11. FINAL CLUSTER-LEVEL BIOLOGICAL ANNOTATIONS
+
+The 16 computational clusters were assigned 16 cluster-level annotations.
+
+**Important:** 16 clusters do not imply 16 unique biological categories.
+
+| Cluster | Final Biological Annotation | Annotation Category | Confidence |
+|---------|----------------------------|----------------------|------------|
+| 0 | GZMK-associated memory-like CD8 T-cell | Conventional_CD8_associated | Moderate |
+| 1 | Memory-associated conventional T-cell | Conventional_T_associated | Moderate |
+| 2 | Activated/dysfunction-associated CD8 T-cell | Conventional_CD8_associated | High |
+| 3 | Immediate-early-response CD8-associated population | Transcriptional_program | High |
+| 4 | Activated/dysfunction-associated CD8 T-cell | Conventional_CD8_associated | High |
+| 5 | Activation/tissue-associated CD8-associated population | Conventional_CD8_associated | Moderate |
+| 6 | NK-like cytotoxic nonconventional T-cell population | Noncanonical_T_associated | High |
+| 7 | Gamma-delta-like cytotoxic T-cell population | GammaDelta_associated | High |
+| 8 | NK-like/nonconventional cytotoxic T-cell population | Noncanonical_T_associated | High |
+| 9 | NK-like cytotoxic population | NK_associated | High |
+| 10 | NK/gamma-delta-like nonconventional T-cell population | Noncanonical_T_associated | High |
+| 11 | Gamma-delta-like T-cell population | GammaDelta_associated | High |
+| 12 | Activated/dysfunction-associated tissue-associated CD8 T-cell | Conventional_CD8_associated | High |
+| 13 | Gamma-delta-like cytotoxic T-cell population | GammaDelta_associated | High |
+| 14 | NK-like cytotoxic population | NK_associated | High |
+| 15 | Gamma-delta-like nonconventional T-cell population | GammaDelta_associated | High |
+
+**Annotation summary:**
+- 16/16 computational clusters annotated
+- 13 unique biological annotation categories
+- No cluster left without a final annotation
+- No claim that every population represents a canonical CD8 T-cell state
+
+---
+
+## 12. DONOR REPRESENTATION
+
+Donor representation was explicitly evaluated because the 23 donors, rather than individual cells, represent the biological replicates.
+
+### Examples of donor concentration
+
+| Cluster | Largest donor representation |
+|---------|------------------------------|
+| 7 | ~97.6% |
+| 13 | ~99.6% |
+| 14 | ~96.1% |
+| 9 | ~91.6% |
+| 1 | ~77% |
+| 12 | ~79.8% |
+
+**Interpretation:** These clusters are retained because donor concentration does not invalidate their existence as observed transcriptional populations. However, donor concentration limits the strength of cohort-level biological generalization. Consequently, the presence of a cluster is not interpreted as evidence that the corresponding population is uniformly present across all clinical states or donors.
+
+---
+
+## 13. CD8 COMPARTMENT INTERPRETATION
+
+The Phase 4 analysis demonstrates that the Phase 3 CD8-labelled compartment is transcriptionally heterogeneous.
+
+### Conventional CD8/T-associated populations
+
+Including populations characterized by:
+- Memory-associated programs
+- Activation-associated programs
+- Dysfunction-associated programs
+- Tissue-associated programs
+- Immediate-early response programs
+
+### Nonconventional T-cell-associated populations
+
+Including:
+- NK-like cytotoxic populations
+- Gamma-delta-like populations
+- Mixed NK/gamma-delta-like populations
+
+**Why this matters:** The Phase 3 transfer label describes the cells' position within the global atlas, whereas Phase 4 provides a more detailed characterization of their transcriptional structure.
+
+---
+
+## 14. IMPORTANT INTERPRETATION BOUNDARIES
+
+### No exhaustion claim
+"Dysfunction-associated" transcriptional evidence is not treated as proof of functional exhaustion.
+
+### No tissue-resident memory claim
+"Tissue-associated" expression is not treated as definitive evidence of TRM identity.
+
+### No HBV-specificity claim
+The analysis does not establish antigen specificity or HBV-specific T-cell receptor activity.
+
+### No pathogenic/protective claim
+The analysis does not determine whether any population is pathogenic, protective, beneficial, or harmful.
+
+### No clinical-state inference
+Differences in cell composition across clinical states are not interpreted as statistically supported clinical-state effects in Phase 4. Those questions require donor-aware analyses in later phases.
+
+### No trajectory/progression model
+The five GEO-defined clinical states are treated as distinct clinical groups. Phase 4 does not infer a trajectory among them.
+
+### No causal inference
+All observations are descriptive and exploratory.
+
+---
+
+## 15. FINAL OBJECT
+
+### Integrity Checkpoint
 
 | Aspect | Status | Value |
 |--------|--------|-------|
-| Cell count | ✅ | 44,229 |
-| All CD8_T | ✅ | 100% |
-| PCA | ✅ | 50 dims |
-| UMAP | ✅ | 2D |
-| Clusters | ✅ | 17 |
-| CD8_State annotation | ✅ | 17 states, 0 missing |
-| RNA_snn graph | ✅ | Present |
+| Cell count | ✅ | 41,281 |
+| Feature count | ✅ | 24,452 |
+| Donors | ✅ | 23 |
+| Clinical states | ✅ | 5 |
+| Computational clusters | ✅ | 16 |
+| Biological annotations | ✅ | 16/16 clusters |
+| Unique biological categories | ✅ | 13 |
+| PCA | ✅ | 50 dimensions |
+| CD8 UMAP | ✅ | Present |
+| CD8 neighbor graph | ✅ | Present |
+| CD8 SNN graph | ✅ | Present |
 | Variable features | ✅ | 2,000 HVGs |
+| Missing biological annotations | ✅ | 0 |
+| Seurat object validity | ✅ | Passed |
+| Cell-ID integrity | ✅ | Passed |
 
-**Final object:** `phase4_final_cd8_analysis.rds`
-- Dimensions: 44,229 cells × 18,925 genes
-- Reductions: pca (50D), umap (2D)
-- Graphs: RNA_nn, RNA_snn
-- Metadata: seurat_clusters, CD8_State, Phase, Donor, GSM, + Phase 3 provenance
-- Misc: Phase4_* analysis parameters (HVG, Clustering, UMAP, Annotation, Composition)
+### FINAL FROZEN OBJECT
 
----
+**Primary final object:**
+```
+results/rds_objects/phase4_final_cd8_analysis_adjudicated.rds
+```
 
-## DELIVERABLES SUMMARY
+**Dimensions:** 41,281 cells × 24,452 genes
 
-### RDS Objects (4)
-1. `phase4_cd8_neighbors_clustering.rds` — after clustering
-2. `phase4_cd8_umap.rds` — after UMAP
-3. `phase4_cd8_markers.rds` — after marker discovery
-4. `phase4_final_cd8_analysis.rds` — **FINAL frozen object**
+**Reductions:**
+- `pca`
+- `umap_cd8`
 
-### Tables (15+)
-- `phase4_cd8_qc_summary.csv` — overall QC
-- `phase4_cd8_qc_by_phase.csv` — QC by clinical state
-- `phase4_cd8_qc_by_donor.csv` — QC by donor
-- `phase4_cd8_transfer_summary.csv` — Phase 3 confidence metrics
-- `phase4_cd8_variable_features.csv` — 2,000 HVGs ranked
-- `phase4_cd8_hvg_categories.csv` — HVG categorization
-- `phase4_cd8_hvg_category_summary.csv` — HVG composition
-- `phase4_cd8_pca_variance.csv` — PC variance table
-- `phase4_cd8_cluster_sizes.csv` — cluster counts
-- `phase4_cd8_all_cluster_markers.csv` — all markers (12,847 rows)
-- `phase4_cd8_significant_cluster_markers.csv` — sig. markers (7,356 rows)
-- `phase4_cd8_top10_markers_per_cluster.csv` — ranked top 10
-- `phase4_cd8_biological_annotations.csv` — cluster → CD8_State mapping
-- `phase4_cd8_state_counts_by_phase.csv` — state counts
-- `phase4_cd8_state_composition_by_phase.csv` — state % by phase
-- `phase4_cd8_donor_level_composition.csv` — per-donor composition
-- `phase4_cd8_donor_state_summary.csv` — donor-level summary by phase
-- `phase4_cd8_marker_validation_panels.csv` — 72 validation markers
-- `phase4_cd8_selected_state_markers.csv` — markers for 7 conventional states
-- `phase4_cd8_selected_state_top15_markers.csv` — ranked top 15
+**Graphs:**
+- `CD8_nn`
+- `CD8_snn`
 
-### Figures (6)
-- `phase4_cd8_umap_clusters.png` — 17 clusters labeled
-- `phase4_cd8_umap_clinical_phase.png` — 5 phases colored
-- `phase4_cd8_marker_validation_dotplot.png` — 72 markers × 17 clusters
-- `phase4_cd8_state_composition_heatmap.png` — states × phases
+**Key metadata:**
+- `GSM`
+- `Donor`
+- `Phase`
+- `Final_Cell_Type`
+- `Transfer_Confidence`
+- `Neighbour_Agreement`
+- `Low_Confidence`
+- `CD8_Cluster`
+- `CD8_Biological_Annotation`
 
 ---
 
-## NEXT STEP
+## 16. PHASE 4 OUTPUTS
 
-✅ **Phase 4 COMPLETE**
+### RDS Objects
 
-**Phase 5 (Myeloid Analysis):** Characterize inflammatory myeloid cells
-- Subset 3,466 Inflammatory_Myeloid cells
-- Re-cluster and characterize subpopulations
-- Identify markers
-- Map composition across clinical phases
+| Object | Purpose |
+|--------|---------|
+| `phase4_cd8_source_layers_preserved.rds` | Source-layer checkpoint created before joining CD8 normalized data layers |
+| `phase4_final_cd8_analysis_adjudicated.rds` | Frozen final Phase 4 object |
+
+### Tables
+
+- `phase4_cd8_cluster_sizes.csv`
+- `phase4_cd8_all_cluster_markers.csv`
+- `phase4_cd8_significant_cluster_markers.csv`
+- `phase4_cd8_top20_markers_per_cluster.csv`
+- `phase4_cd8_top50_markers_per_cluster.csv`
+- `phase4_cd8_program_definitions.csv`
+- `phase4_cd8_program_scores.csv`
+- `phase4_cd8_lineage_panel_summary.csv`
+- `phase4_cd8_annotation_adjudication.csv`
+- `phase4_cd8_final_biological_annotations.csv`
+- `phase4_cd8_donor_annotation_representation.csv`
+- `phase4_cd8_donor_cluster_proportions.csv`
+- `phase4_cd8_donor_cluster_summary.csv`
+- `phase4_cd8_summary.txt`
+
+**Note:** Exact filenames may vary according to the final script output directory.
+
+### Figures
+
+Key visualization outputs include:
+- CD8 cluster UMAP
+- CD8 biological annotation UMAP
+- CD8 marker heatmap
+- CD8 marker/program visualizations
+- Donor representation summaries
+
+**Final biological annotation figure:** `phase4_cd8_final_biological_annotations.png`
 
 ---
 
-**Phase 4 README compiled:** September 2026  
-**Script 04 completion:** Section 16.8 endpoint  
-**Status:** ✅ COMPLETE — All validations passed, object frozen
+## 17. REPRODUCIBILITY
+
+The Phase 4 analysis is implemented in:
+```
+04_phase4_cd8_analysis.R
+```
+
+The script contains:
+- Input validation
+- CD8 extraction
+- Source-layer preservation
+- Normalized-expression handling
+- HVG selection
+- Scaling
+- PCA
+- Neighbor graph construction
+- Clustering
+- UMAP
+- Marker discovery
+- Transcriptional program scoring
+- Lineage evidence assessment
+- Annotation adjudication
+- Donor representation analysis
+- Final integrity validation
+- Final RDS export
+
+---
+
+## 18. BIOLOGICAL ROLE OF PHASE 4 IN THE OVERALL PROJECT
+
+Phase 4 provides the detailed transcriptional characterization of the CD8-labelled compartment identified in the global Phase 3 atlas.
+
+It establishes the populations and programs that will later be examined using donor-aware analyses.
+
+**Key methodological principle carried forward:**
+
+> Cells are used to discover and characterize transcriptional states; donors are the biological replicates for clinical-state inference.
+
+Therefore, Phase 4 does not treat thousands of individual cells as independent biological replicates.
+
+---
+
+## 19. NEXT STEP
+
+### Phase 5 — MYELOID ANALYSIS
+
+Phase 5 will characterize the myeloid compartment identified in the Phase 3 global atlas.
+
+**Planned objectives:**
+- Extract the Phase 3 Monocyte_Myeloid compartment
+- Preserve donor and clinical-state provenance
+- Perform myeloid-specific dimensionality reduction and clustering
+- Characterize transcriptional heterogeneity
+- Identify inflammatory/macrophage-associated populations
+- Evaluate lineage and state-associated marker programs
+- Assess donor representation
+- Produce conservative biological annotations
+
+As with Phase 4, Phase 5 will distinguish:
+- Computational clusters → Transcriptional programs → Biological interpretation
+
+Rather than treating every computational cluster as an automatically defined biological cell state.
+
+---
+
+## PHASE 4 STATUS
+
+### ✅ PHASE 4 COMPLETE
+
+**Final checkpoint:**
+- 41,281 CD8-labelled cells
+- 24,452 genes
+- 23 donors
+- 5 GEO-defined clinical states
+- 16 computational clusters
+- 16/16 clusters biologically annotated
+- 13 unique biological annotation categories
+- 2,000 CD8 HVGs
+- 50-dimensional PCA
+- CD8-specific UMAP
+- Marker discovery completed
+- Lineage evidence evaluated
+- Donor representation evaluated
+- Final Seurat validity check passed
+- Cell-ID integrity check passed
+- Final adjudicated RDS frozen
+
+**Final object:**
+```
+results/rds_objects/phase4_final_cd8_analysis_adjudicated.rds
+```
+
+**Status:** ✅ **COMPLETE — FINAL OBJECT FROZEN**
+
+---
+
+**Phase 4 README updated:** September 2026  
+**Analysis scope:** CD8-labelled compartment characterization  
+**Inference unit:** Donor for downstream clinical-state inference  
+**Biological interpretation:** Exploratory and observational
