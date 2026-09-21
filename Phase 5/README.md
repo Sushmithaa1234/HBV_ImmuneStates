@@ -1,593 +1,710 @@
-# Phase 6 — Donor-Aware Differential Abundance and Expression Analysis
+# Phase 5 — Myeloid State Analysis
 
 ## Overview
 
-Phase 6 performs **statistical inference on myeloid population abundance and transcriptional state** across the five clinically defined HBV groups.
+Phase 5 performs focused transcriptional state discovery and biological adjudication within the **Monocyte_Myeloid compartment** identified during Phase 3 of the HBV liver single-cell RNA-seq analysis.
 
-The key analytical principle is:
+The analysis asks:
 
-> **Donors are the biological replicates. Cells are units for state discovery.**
+> **What transcriptionally distinct myeloid-associated populations are present within the liver Monocyte_Myeloid compartment, and what biological programs characterize them?**
 
-This phase asks:
+This phase is deliberately exploratory and descriptive. It does **not** infer clinical-state differences, disease progression, causality, or functional phenotypes.
 
-* Do myeloid population abundances differ across clinical groups when properly accounting for donor variation?
-* Do transcriptional programs differ across clinical groups?
-* Which genes show statistically significant differential expression across clinical groups, controlling for donor-level heterogeneity?
-* Are observed differences robust to donor structure, or are they artifacts of one or two outlier individuals?
-
-Phase 6 is the **first phase** in which clinical-state inference is performed.
-
-All results explicitly account for donor identity as a random effect or blocking factor.
+Clinical-state inference is reserved for **Phase 6**, where donor identity is treated as the biological replicate.
 
 ---
 
-## Input Data
+## Dataset Context
 
-Phase 6 uses the final Phase 5 annotated myeloid Seurat object:
+The project uses liver-only single-cell RNA-seq data from:
 
-```text
+**GEO accession:** `GSE182159`
+
+The dataset contains liver samples from **23 individuals** representing five clinically defined HBV states:
+
+| Clinical state | Description |
+|---|---|
+| AC | Acute carrier |
+| AR | Active replication |
+| IA | Immune active |
+| IT | Immune tolerant |
+| NL | Normal liver |
+
+> The five groups are treated as clinically defined comparison groups. They are **not modeled as a progression trajectory**.
+
+Phase 5 operates exclusively on the cells classified as:
+
+```
+Final_Cell_Type == "Monocyte_Myeloid"
+```
+
+from the Phase 3 broad immune atlas.
+
+---
+
+## Input
+
+Phase 5 uses the final Phase 3 full-dataset object:
+
+```
+results/rds_objects/phase3_final_full_dataset.rds
+```
+
+**Phase 3 dataset contains:**
+
+- 106,592 total cells
+- 24,452 genes
+- 23 donors
+- 5 clinical states
+
+**Phase 5 Monocyte_Myeloid compartment:**
+
+- 2,489 cells
+- 24,452 genes
+- 23 donors
+- 5 clinical states
+
+All 23 donors are represented in the input compartment.
+
+---
+
+## Analytical Principles
+
+Several principles were locked before biological interpretation.
+
+### 1. Donors are the biological replicates
+
+Individual cells are used for:
+
+- transcriptional state discovery
+- clustering
+- marker identification
+- program characterization
+
+Individual donors are the biological replicates for:
+
+- clinical-state inference
+- differential abundance
+- differential expression/state analysis
+
+Therefore, Phase 5 does **not** treat thousands of cells from the same individual as thousands of independent biological replicates.
+
+---
+
+### 2. Processed expression values are preserved
+
+The GEO supplementary matrices contain processed expression values corresponding to log-transformed CP10K expression.
+
+Phase 5 therefore uses the existing processed expression data.
+
+No attempt is made to reconstruct raw UMI counts.
+
+In particular:
+
+- no reverse transformation to pseudo-counts
+- no fabricated count matrix
+- no re-normalization from reconstructed counts
+- no claim that stored expression values are raw counts
+
+---
+
+### 3. Biological interpretation is evidence-driven
+
+Cluster identities are adjudicated using multiple sources of evidence:
+
+- differential marker genes
+- lineage-associated marker panels
+- transcriptional program scores
+- antigen-presentation programs
+- inflammatory programs
+- macrophage-associated programs
+- donor representation
+- cluster size
+- potential lineage ambiguity
+
+No biological identity is assigned solely because a particular marker appears among the top-ranked genes.
+
+---
+
+## Computational Workflow
+
+Phase 5 follows the same analysis architecture established for the CD8 compartment in Phase 4.
+
+### 1. Subset the Phase 3 myeloid compartment
+
+The Phase 3 full dataset is subset to:
+
+```
+Final_Cell_Type == "Monocyte_Myeloid"
+```
+
+**Expected result:**
+
+```
+2,489 cells
+24,452 genes
+23 donors
+5 clinical states
+```
+
+The source expression layers are preserved before joining the processed expression layers for downstream analysis.
+
+---
+
+### 2. Preserve the existing expression representation
+
+The Phase 5 analysis uses the processed log-CP10K expression supplied with the GEO dataset.
+
+The analysis does **not** call `NormalizeData()` and does not attempt to reconstruct raw counts.
+
+---
+
+### 3. Highly variable feature selection
+
+A set of 2,000 highly variable genes is selected for dimensionality reduction.
+
+---
+
+### 4. Scaling and PCA
+
+The selected features are scaled and principal component analysis is performed.
+
+The analysis retains:
+
+```
+50 principal components
+```
+
+for downstream structure discovery.
+
+---
+
+### 5. Neighbor graph construction
+
+A nearest-neighbor graph is constructed using:
+
+```
+PC1–PC20
+k = 20
+```
+
+The Phase 5 graph names are:
+
+```
+Myeloid_nn
+Myeloid_snn
+```
+
+---
+
+### 6. Graph-based clustering
+
+Clusters are identified using the shared-nearest-neighbor graph with:
+
+```
+Resolution = 0.4
+Algorithm = Louvain
+```
+
+This produced **five computational clusters**.
+
+Importantly, these are computational clusters first. They are not automatically interpreted as five distinct biological cell states.
+
+---
+
+### 7. UMAP visualization
+
+A UMAP embedding is generated from the PCA representation to visualize the transcriptional structure of the myeloid compartment.
+
+The UMAP is used as a visualization of transcriptional relationships and is **not** treated as an independent source of biological identity.
+
+---
+
+### 8. Marker identification
+
+Cluster-level differential markers are identified using the Wilcoxon rank-sum test.
+
+Marker lists are subsequently interpreted alongside:
+
+- lineage panels
+- transcriptional programs
+- donor representation
+- biological context
+
+---
+
+## Phase 5 Computational Clusters
+
+The final clustering produced five populations:
+
+| Cluster | Cells | Fraction |
+|---:|---:|---:|
+| 0 | 1,153 | 46.3% |
+| 1 | 649 | 26.1% |
+| 2 | 336 | 13.5% |
+| 3 | 283 | 11.4% |
+| 4 | 68 | 2.7% |
+
+These cluster labels are computational identifiers and should not be confused with final biological annotations.
+
+---
+
+## Biological Adjudication
+
+The final biological annotations were assigned after reviewing:
+
+- top-ranked markers
+- lineage-associated panels
+- transcriptional program scores
+- macrophage-associated signal
+- antigen-presentation signal
+- inflammatory signal
+- donor representation
+- evidence of non-myeloid populations
+
+### Final annotations
+
+| Cluster | Biological annotation | Confidence | Interpretation |
+|---:|---|---|---|
+| 0 | Inflammatory monocyte-associated population | High | Interpretable, but strongly donor concentrated |
+| 1 | Activated/antigen-presenting monocyte-associated population | High | Broad donor representation |
+| 2 | Antigen-presenting myeloid population | Moderate–High | Broad representation; macrophage identity not forced |
+| 3 | FCGR3A-associated myeloid population | Moderate | Strong donor concentration and mixed granulocyte signal |
+| 4 | Platelet-associated population | High | Non-myeloid-associated; entirely donor concentrated |
+
+---
+
+## Cluster 0 — Inflammatory Monocyte-Associated Population
+
+Cluster 0 is characterized by a strong inflammatory monocyte-associated transcriptional program.
+
+**Notable markers:**
+
+`CCR2`, `S100A8`, `S100A12`, `FCN1`, `CD14`, `VCAN`, `NFE2`, `ALOX5AP`
+
+The cluster also shows strong core myeloid and antigen-presentation programs.
+
+**Biological annotation:**
+
+> **Inflammatory monocyte-associated population**
+
+### Important limitation
+
+Cluster 0 is strongly donor concentrated:
+
+```
+1,086 / 1,153 cells (94.2%)
+```
+
+originate from the largest contributing donor.
+
+Therefore, the existence of this transcriptional population can be described within the dataset, but its prevalence or relationship to clinical state should **not** be generalized from the cell count alone.
+
+Donor-aware analysis is deferred to Phase 6.
+
+---
+
+## Cluster 1 — Activated/Antigen-Presenting Monocyte-Associated Population
+
+Cluster 1 displays a coherent activated and antigen-presenting monocyte-associated profile.
+
+**Notable markers:**
+
+`IL1A`, `SERPINB2`, `C15orf48`, `GPR183`, `IL1R2`, `TRAF1`, `MIR155HG`, `THBS1`
+
+The population also demonstrates strong HLA class II and antigen-presentation expression:
+
+`HLA-DRA`, `HLA-DRB1`, `HLA-DPA1`, `HLA-DPB1`, `CD74`
+
+**Biological annotation:**
+
+> **Activated/antigen-presenting monocyte-associated population**
+
+The population is represented across multiple donors, making the annotation less dependent on a single donor than clusters 0 and 3.
+
+However, the annotation remains descriptive. It does not establish a causal or functional activation mechanism.
+
+---
+
+## Cluster 2 — Antigen-Presenting Myeloid Population
+
+Cluster 2 shows strong core myeloid identity together with prominent antigen-presentation programs.
+
+**Representative evidence:**
+
+`LYZ`, `TYROBP`, `FCER1G`, `CTSS`, `AIF1`, `CST3`, `HLA-DRA`, `HLA-DRB1`, `HLA-DPA1`, `HLA-DPB1`, `CD74`
+
+The population also shows some macrophage-associated expression. However, the overall macrophage-associated program is not strong enough to justify forcing a specific macrophage identity.
+
+**Biological annotation:**
+
+> **Antigen-presenting myeloid population**
+
+This intentionally avoids unsupported labels such as:
+
+- macrophage
+- Kupffer cell
+- disease-associated macrophage
+- TREM2+ macrophage
+- FOLR2+ macrophage
+
+---
+
+## Cluster 3 — FCGR3A-Associated Myeloid Population
+
+Cluster 3 shows a strong FCGR3A-associated myeloid signature.
+
+**Notable markers:**
+
+`FCGR3A`, `CX3CR1`, `MS4A4A`, `LYZ`, `TYROBP`, `FCER1G`, `AIF1`, `CST3`
+
+Strong HLA class II expression is also present.
+
+However, the cluster contains some granulocyte-associated signal:
+
+`FCGR3B`, `CSF3R`, `FPR1`
+
+and is strongly donor concentrated:
+
+```
+259 / 283 cells (91.5%)
+```
+
+originate from one donor.
+
+**Biological annotation:**
+
+> **FCGR3A-associated myeloid population**
+
+Rather than being forced into a neutrophil, dendritic-cell, or macrophage identity.
+
+The donor concentration is an important limitation for downstream cohort-level interpretation.
+
+---
+
+## Cluster 4 — Platelet-Associated Population
+
+Cluster 4 is qualitatively different from the other four populations.
+
+**Strongest markers:**
+
+`PF4`, `PPBP`, `TUBB1`, `ITGA2B`, `GP9`, `TREML1`, `MPIG6B`, `PF4V1`, `CLEC1B`, `CALD1`
+
+This is a strong platelet-associated transcriptional signature.
+
+The population consists of:
+
+```
+68 cells
+```
+
+and all 68 cells originate from a single donor.
+
+**Biological annotation:**
+
+> **Platelet-associated population**
+
+This population is **not interpreted as a biological myeloid state**.
+
+### Why it is not simply called a doublet
+
+The available expression data are processed log-CP10K values rather than raw counts.
+
+Therefore, this analysis does not have the raw-count information necessary to make a definitive doublet classification.
+
+The conservative interpretation is:
+
+> **Platelet-associated / non-myeloid-associated population**
+
+rather than a definitive claim of doublet contamination.
+
+---
+
+## Macrophage Program Assessment
+
+One of the important findings of Phase 5 is that a strong macrophage-associated transcriptional program was **not observed** across the five computational clusters at this resolution.
+
+Macrophage-associated markers and programs were comparatively weak.
+
+This means the analysis does **not** force the Monocyte_Myeloid compartment into conventional macrophage subtypes simply because macrophages were part of the original biological question.
+
+This is an intentional methodological decision.
+
+### Interpretation
+
+The absence of a strong macrophage-associated program at this clustering resolution is itself a result of the analysis.
+
+It does **not** demonstrate that macrophages are absent from the liver.
+
+It means only that the current dataset representation and analytical resolution do not provide sufficiently strong evidence to assign the observed populations to specific macrophage states.
+
+---
+
+## Donor Representation
+
+Donor representation was explicitly evaluated for every computational cluster.
+
+| Cluster | Donors represented | Largest-donor fraction | Interpretation |
+|---:|---:|---:|---|
+| 0 | 16 | 94.2% | Strong donor concentration |
+| 1 | 18 | 26.2% | Broad representation |
+| 2 | 19 | 30.7% | Broad representation |
+| 3 | 8 | 91.5% | Strong donor concentration |
+| 4 | 1 | 100% | Extremely donor concentrated |
+
+These observations are important because a transcriptional population can be biologically coherent while still being poorly suited to cohort-level inference if it is dominated by one individual.
+
+Accordingly:
+
+> **Cell abundance within a cluster is not interpreted as evidence of clinical-state enrichment in Phase 5.**
+
+Clinical-state comparisons require donor-aware analysis and are reserved for Phase 6.
+
+---
+
+## What Phase 5 Can Conclude
+
+Within the liver Monocyte_Myeloid compartment, the analysis identifies:
+
+1. an inflammatory monocyte-associated population
+2. an activated/antigen-presenting monocyte-associated population
+3. an antigen-presenting myeloid population
+4. an FCGR3A-associated myeloid population
+5. a small platelet-associated population (not interpreted as a myeloid state)
+
+The analysis also indicates that macrophage-associated transcriptional programs are relatively weak at this resolution.
+
+These findings provide a structured set of candidate myeloid populations for downstream donor-aware analysis.
+
+---
+
+## What Phase 5 Cannot Conclude
+
+Phase 5 does **not** establish:
+
+- clinical-state-specific abundance differences
+- clinical-state-specific expression differences
+- disease progression
+- causal relationships
+- pathogenic or protective functions
+- HBV-specificity of any transcriptional state
+- macrophage polarization
+- M1/M2 identity
+- Kupffer-cell identity
+- disease-associated macrophage identity
+- functional cell-cell interactions
+- experimental validation
+- generalization beyond the analyzed cohort
+
+These questions require additional evidence and, where appropriate, donor-aware statistical analysis.
+
+---
+
+## Relationship to Phase 6
+
+Phase 5 is primarily a **state-discovery and biological-adjudication phase**.
+
+The resulting populations provide candidate states for Phase 6.
+
+Phase 6 will address questions such as:
+
+- Do myeloid population abundances differ across the five clinical groups?
+- Do transcriptional programs differ between clinical groups?
+- Which genes show donor-aware differential expression/state?
+- Are observed differences robust across individuals rather than driven by one donor?
+
+These analyses will treat:
+
+> **donor = biological replicate**
+
+and will not use individual cells as independent biological replicates for clinical-state inference.
+
+---
+
+## Final Outputs
+
+### RDS
+
+**Final annotated Seurat object:**
+
+```
 results/rds_objects/phase5_final_myeloid_analysis_adjudicated.rds
 ```
 
-The object contains:
+The object contains the computational clustering together with the final biological annotations.
 
-* **2,489 myeloid cells**
-* **24,452 genes**
-* **23 donors (biological replicates)**
-* **5 clinical states: AC, AR, IA, IT, NL**
-* **5 computational clusters with biological annotations**
-* **Processed log-CP10K expression**
+**Final annotation metadata:**
 
----
-
-## Critical Issue: Expression Representation
-
-### The Problem
-
-The Phase 5 input data contain **processed log-CP10K expression** rather than raw UMI counts.
-
-This creates a fundamental challenge for standard count-based differential expression methods:
-
-* Standard DE tools (edgeR, DESeq2) assume raw counts as input
-* Reversing log-transformation introduces artifacts and information loss
-* Reconstructing pseudo-counts from log-CP10K is not mathematically defensible
-* Standard library-size normalization is not applicable to pre-normalized data
-
-### Why This Matters
-
-Differential expression analysis typically follows this pipeline:
-
-```text
-raw counts
-    ↓
-[library-size normalization]
-    ↓
-[log transformation]
-    ↓
-[differential expression testing]
+```
+Myeloid_Biological_Annotation
+Myeloid_Lineage_Category
+Myeloid_Annotation_Confidence
+Myeloid_Donor_Representation
+Myeloid_Interpretation_Eligible
 ```
 
-Because the input data already exist at the log-transformed stage, attempting to reverse this creates:
+**Analysis-level metadata:**
 
-* artificial variance structures
-* spurious count distributions
-* incorrect dispersion estimation
-* invalid p-value calibration
-
-### Solution Approach
-
-Phase 6 uses **log-space linear regression** with proper modeling of the pseudobulk structure:
-
-1. **Aggregate cells to pseudobulk** (per donor × cluster combination)
-2. **Normalize the pseudobulk matrix** using appropriate log-scale methods
-3. **Model in log-space** using empirical-Bayes linear regression
-4. **Apply mixed-model framework** to account for donor as a random effect
-
-This avoids reconstructing counts while preserving statistical validity.
-
----
-
-## Analytical Framework
-
-### Unit of Analysis: Pseudobulk Aggregation
-
-Instead of testing 2,489 individual cells, Phase 6 aggregates to:
-
-```text
-One pseudobulk sample per donor per cluster
 ```
-
-This produces:
-
-| Cluster | Donors represented | Pseudobulk samples |
-| ------: | -----------------: | -----------------: |
-|       0 |                 16 |                 16 |
-|       1 |                 18 |                 18 |
-|       2 |                 19 |                 19 |
-|       3 |                  8 |                  8 |
-|       4 |                  1 |                  1 |
-
-Each pseudobulk sample represents:
-
-```text
-summed expression across all cells from [Donor X] in [Cluster Y]
-```
-
-This gives each pseudobulk sample a biologically coherent origin — it is a true replicate from one individual.
-
-### Normalization Strategy
-
-**Pseudobulk construction:**
-
-1. For each cluster, sum the log-CP10K expression values across all cells from each donor
-2. This yields a donor × gene matrix where each entry is the sum of log-transformed values
-3. (Note: summing log values is not standard; the alternative is to work in the linear space by exponentiating first, summing, then re-log-transforming — this is more principled but computationally intensive and requires stored raw values)
-
-**Recommended approach for your data:**
-
-Because you have access to the individual cell-level log-CP10K values and donor labels, prefer:
-
-1. Exponentiate the cell-level log-CP10K values to recover per-cell linear-space approximations
-2. Aggregate these linear-space values (sum) to pseudobulk per donor × cluster
-3. Re-apply log transformation to the pseudobulk aggregates
-4. Normalize using quantile normalization or VST on the donor × gene pseudobulk matrix
-
-This ensures that pseudobulk aggregates represent true summed expression and are appropriately normalized.
-
-Alternatively, if you retain the original per-sample library-size information from the GEO matrices:
-
-1. Aggregate cell-level log-CP10K sums per donor × cluster
-2. Rescale by the per-sample library-size factor
-3. Apply standard count-based normalization (TMM, edgeR, or DESeq2) to the rescaled pseudobulk matrix
-4. Proceed with log-space testing
-
----
-
-### Statistical Model
-
-Phase 6 uses a **mixed-effects linear model** on log-scale pseudobulk data:
-
-```text
-log(Pseudobulk expression) ~ Clinical State + (1 | Donor) + Batch/Technical Variables (if applicable)
-```
-
-Breaking this down:
-
-| Component | Interpretation |
-| --- | --- |
-| **log(Pseudobulk expression)** | Outcome: log-scaled aggregated expression per donor × cluster |
-| **Clinical State** | Fixed effect: AC, AR, IA, IT, NL (the biological comparison) |
-| **(1 \| Donor)** | Random intercept: allows each donor to have its own baseline expression level |
-| **Batch/Technical** | Optional: if samples were processed in different batches, include batch as a fixed effect or random effect depending on design |
-
-This model structure ensures:
-
-* **Clinical-state differences are detected after accounting for baseline donor-to-donor variation**
-* **Donor-specific outliers (like P190719's strong inflammatory signal in cluster 0) do not dominate the test statistic**
-* **Statistical power is appropriate for N=16–19 pseudobulk samples per cluster**
-
----
-
-## Cluster Eligibility
-
-Not all Phase 5 clusters are equally suitable for Phase 6 analysis.
-
-| Cluster | Sample size (donors) | Donor concentration | Eligibility | Recommendation |
-| ------: | -------------------: | -------------------: | --- | --- |
-|       0 |                   16 |              94.2% | Conditional | **Include with donor blocking; flag results as P190719-influenced** |
-|       1 |                   18 |              26.2% | Primary | **Include as primary analysis** |
-|       2 |                   19 |              30.7% | Primary | **Include as primary analysis** |
-|       3 |                    8 |              91.5% | Weak | **Include only as sensitivity; use caution** |
-|       4 |                    1 |             100% | Exclude | **Exclude from clinical-state inference** |
-
-### Cluster 0 Caveat
-
-Cluster 0 contains 1,086 cells from donor P190719 (IA state) and only 67 cells from other donors.
-
-When donor P190719 is used as a random intercept in the model, its elevated baseline myeloid expression is absorbed into the random effect.
-
-**However:**
-
-* Any IA-state effect in cluster 0 may be confounded with P190719-specific biology
-* Sensitivity analyses should exclude P190719 to test whether observed effects persist
-* Results should be reported with the caveat that cluster 0 is largely donor-driven
-
-### Cluster 3 Caveat
-
-Cluster 3 has weak sample size (N=8 pseudobulk samples) and high donor concentration (91.5% from one donor).
-
-Including it in Phase 6 may be uninformative.
-
-Options:
-
-* **Exclude from primary analysis** and treat as exploratory only
-* **Include as a sensitivity** with explicit sample-size caveat in methods/results
-* **Combine with cluster 1 or 2** if biological interpretation supports aggregation
-
-### Cluster 4 Exclusion
-
-Cluster 4 is platelet-associated and not myeloid-interpretable.
-
-**Exclude from Phase 6.**
-
----
-
-## Workflow Overview
-
-Phase 6 proceeds through the following steps:
-
-### Step 1: Pseudobulk Aggregation
-
-For each myeloid cluster separately:
-
-1. Subset the Phase 5 Seurat object to that cluster
-2. Extract the expression matrix (cells × genes)
-3. Create a donor-level index
-4. Sum expression values (or aggregate through exponentiation/re-transformation) by donor
-5. Output: One donor × gene matrix per cluster
-
-Result: A normalized pseudobulk expression matrix per cluster where:
-
-```text
-rows = donors (N = 8 to 19 depending on cluster)
-columns = genes (N = ~24,000)
-values = log-scale normalized pseudobulk expression
+Phase5_Analysis
+Phase5_Expression
+Phase5_Donor_Unit
+Phase5_Inference
 ```
 
 ---
 
-### Step 2: Metadata Construction
+### Final Biological Annotation Table
 
-Create a per-pseudobulk-sample metadata table containing:
-
-```text
-Pseudobulk_ID (unique identifier)
-Donor (D528848, D529074, ..., P191217)
-Clinical_State (AC, AR, IA, IT, NL)
-Cluster (0, 1, 2, 3, or 4)
-Sample_N_Cells (how many cells went into this pseudobulk aggregate)
+```
+results/tables/phase5_myeloid_final_biological_annotations.csv
 ```
 
-This metadata will be used to fit the statistical model.
+This table contains:
+
+- computational cluster
+- cell count
+- biological annotation
+- lineage category
+- confidence
+- donor representation interpretation
+- myeloid interpretation eligibility
+- evidence summary
+- interpretation boundary
 
 ---
 
-### Step 3: Statistical Framework Setup
+### Additional outputs
 
-Use a **mixed-effects linear regression framework** that can:
-
-1. Model on log-scale data (not count data)
-2. Fit random intercepts per donor
-3. Test fixed effects (clinical state)
-4. Provide empirical-Bayes shrinkage for small-sample inference (recommended)
-
-**Recommended tools:**
-
-* **limma + dream()** (R): Empirical-Bayes linear regression with mixed-effects extensions
-* **lme4 + lmerTest** (R): Classical mixed-effects regression with Satterthwaite or Kenward-Roger degrees-of-freedom approximation
-* **statsmodels** (Python): Mixed-effects regression via REML
-
-The choice between them depends on whether you want:
-
-* **limma/dream**: Faster, borrows strength across genes, designed for genomics
-* **lme4/lmerTest**: More conservative, classical statistical inference, better for small sample sizes
-
-For your scenario (N=16–19 pseudobulk samples per cluster, ~24,000 genes), **limma with dream()** is ideal because it applies empirical-Bayes shrinkage across the large gene space.
+| Output | Purpose |
+|---|---|
+| `phase5_myeloid_cluster_sizes.csv` | Cluster population sizes |
+| `phase5_myeloid_all_positive_markers.csv` | All significant positive markers per cluster |
+| `phase5_myeloid_top20_markers.csv` | Top 20 markers per cluster |
+| `phase5_myeloid_top50_markers.csv` | Top 50 markers per cluster |
+| `phase5_myeloid_cluster_program_scores.csv` | Biological program scores by cluster |
+| `phase5_myeloid_marker_panel_cluster_means.csv` | Lineage-panel gene expression by cluster |
+| `phase5_myeloid_cluster_donor_counts.csv` | Donor and GSM composition by cluster |
+| `phase5_myeloid_cluster_donor_representation.csv` | Donor representation summary by cluster |
+| `phase5_myeloid_donor_cluster_proportions.csv` | Cluster proportions within each donor |
+| `phase5_myeloid_umap_clusters.png` | UMAP colored by cluster |
+| `phase5_myeloid_umap_clinical_state.png` | UMAP colored by clinical state |
+| `phase5_myeloid_marker_validation_dotplot.png` | DotPlot of marker genes by cluster |
 
 ---
 
-### Step 4: Model Fitting (Per Cluster)
+## Reproducibility
 
-For each eligible cluster:
+The Phase 5 workflow is designed to be reproducible from the Phase 3 final object.
 
-1. Create the design matrix:
+The analysis preserves:
 
-   ```text
-   Formula: ~ Clinical_State + (1 | Donor)
-   ```
+- the original cell identities
+- donor identities
+- clinical-state metadata
+- processed expression representation
+- computational cluster assignments
+- marker results
+- biological adjudication
 
-2. Fit the mixed model to the pseudobulk matrix:
+No cells were removed specifically because their biological identity was inconvenient or ambiguous.
 
-   ```text
-   For each gene:
-       log(Pseudobulk[donor, gene]) ~ Clinical_State_Fixed + Donor_RandomIntercept
-   ```
-
-3. Extract:
-
-   * Gene-level effect sizes (log2-fold-change) for each clinical-state contrast
-   * Gene-level p-values and adjusted p-values (FDR)
-   * Model diagnostics (residuals, variance components)
-
----
-
-### Step 5: Hypothesis Testing
-
-Define biological contrasts of interest, such as:
-
-```text
-IA vs NL
-AC vs NL
-IT vs NL
-AR vs NL
-IA vs AR
-(and any others of biological interest)
-```
-
-For each contrast and each cluster, the model produces:
-
-| Gene | log2FC | p-value | FDR-adjusted p-value | Mean expression (IA) | Mean expression (comparison group) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| S100A8 | 0.85 | 0.0023 | 0.031 | 2.34 | 1.49 |
-| ... | ... | ... | ... | ... | ... |
-
----
-
-### Step 6: Validation and Sensitivity Analysis
-
-#### Assumption Checking
-
-1. **Linearity:** Examine residual-versus-fitted plots for each contrast
-2. **Normality:** Q-Q plots of residuals per gene
-3. **Homogeneity of variance:** Levene's test or visual inspection of variance across groups
-4. **No hidden batch effects:** Check whether pseudobulk samples cluster by processing batch (if known)
-
-#### Sensitivity Analyses
-
-1. **Exclude donor P190719:** Re-fit models for clusters 0, 3 to test whether effects persist when the most extreme donor is removed
-
-2. **Exclude cluster 0:** Re-fit to test whether analyses in clusters 1 & 2 are robust (they should not change)
-
-3. **Apply stricter significance thresholds:** Use FDR < 0.01 instead of FDR < 0.05 to identify only the most robust signals
-
-4. **Effect-size filtering:** Report only genes with |log2FC| > 1.0 alongside p-values to avoid overinterpreting tiny effects
-
----
-
-### Step 7: Interpretation and Visualization
-
-#### Differential Expression Tables
-
-Produce final DE result tables per cluster per contrast, including:
-
-```text
-Gene
-log2FC
-p-value
-FDR-adjusted p-value
-Mean pseudobulk expression in group A
-Mean pseudobulk expression in group B
-Interpretation (significant yes/no at FDR < 0.05)
-```
-
-#### Volcano Plots
-
-For each cluster and major contrast (e.g., IA vs NL):
-
-```text
-x-axis: log2 fold-change
-y-axis: -log10(FDR-adjusted p-value)
-points: one per gene
-highlighted: genes with |log2FC| > 0.5 and FDR < 0.05
-```
-
-#### Heatmaps
-
-For each cluster:
-
-```text
-Rows: top 30–50 DE genes (sorted by p-value or log2FC)
-Columns: pseudobulk samples (donors), colored by clinical state
-Values: normalized log-scale expression
-```
-
-This shows which DE genes are truly cluster-coherent and which are noisy.
-
-#### Donor-level Visualization
-
-Create plots showing:
-
-```text
-For each significant gene in cluster 1:
-    y-axis: pseudobulk expression (log scale)
-    x-axis: clinical state
-    points: individual donors
-    colored: by donor
-```
-
-This directly visualizes whether observed group differences are driven by one or many donors.
-
----
-
-## What Phase 6 Addresses
-
-Within the constraint of the processed log-CP10K data and the donor structure:
-
-✅ **Differential abundance:** Do clusters 0–3 differ in cell count across clinical groups?
-✅ **Differential expression:** Which genes are up/down-regulated in specific clusters across clinical groups?
-✅ **Program-level differences:** Do transcriptional programs (inflammatory, antigen-presentation, etc.) differ across groups?
-✅ **Donor robustness:** Are observed differences driven by one outlier donor, or seen across independent individuals?
-✅ **Effect sizes:** What is the magnitude of expression change, not just statistical significance?
-
----
-
-## What Phase 6 Does NOT Address
-
-❌ **Causality:** Differential expression does not establish that expression changes are causal to disease state
-❌ **Mechanism:** Expression differences do not reveal mechanism without additional functional data
-❌ **Function:** Transcriptional state does not prove functional phenotype
-❌ **Cell-cell interaction:** This phase does not model interaction between cell types; that is Phase 8
-❌ **Pathway activation:** Gene-level DE does not automatically indicate pathway activation; that is Phase 7
-❌ **HBV-specific responses:** The analysis cannot distinguish HBV-driven effects from other chronic viral responses without external validation
-
----
-
-## Important Caveats
-
-### 1. Sample Size
-
-Even with 23 donors total, cluster-specific sample sizes are modest:
-
-* Clusters 1 & 2: N = 18–19 ✅
-* Cluster 0: N = 16 (⚠️ P190719-dominated)
-* Cluster 3: N = 8 (❌ underpowered)
-
-At these sample sizes:
-
-* Large, consistent effects are reliably detected
-* Small effects (|log2FC| < 0.3) may be missed
-* Single-donor artifacts can appear significant
-
-**Mitigation:** Report effect sizes alongside p-values and prioritize biological validation.
-
-### 2. Donor Concentration in Clusters 0 & 3
-
-The Phase 5 analysis revealed that:
-
-* Cluster 0 is 94% donor P190719 (IA state)
-* Cluster 3 is 92% donor P190719 (IA state)
-
-While the random-intercept model absorbs baseline donor differences, P190719's dominance means:
-
-* Any strong IA-enriched signal in these clusters may reflect P190719 biology
-* Statistical significance does not prove the signal is IA-state-specific
-
-**Mitigation:** Always present results with and without P190719 as a sensitivity check.
-
-### 3. Processed Expression Data
-
-Standard count-based DE tests are not applicable to processed log-CP10K data.
-
-The workflows recommended in Phase 6 use log-space linear regression, which is:
-
-* Statistically valid
-* Appropriate for normalized data
-* Well-established for microarray-type analysis
-
-However, it does **not** recover information lost during the initial log transformation and normalization.
-
-**Implication:** p-values and fold-changes reflect signal in the pseudobulk log-scale space, not in raw counts.
-
----
-
-## Statistical Rigor Checklist
-
-Before reporting Phase 6 results, verify:
-
-- [ ] Pseudobulk aggregation preserves cell counts and donor identities correctly
-- [ ] Normalization method is appropriate for the log-scale pseudobulk matrix
-- [ ] Model formula explicitly includes (1 | Donor) or equivalent random effect
-- [ ] Model assumptions (linearity, normality, homogeneity) are checked visually and statistically
-- [ ] Multiple testing correction is applied (FDR or Benjamini-Hochberg)
-- [ ] Effect sizes are reported alongside p-values
-- [ ] Sensitivity analyses (remove P190719, increase FDR threshold) are performed and reported
-- [ ] Cluster-specific caveats (sample size, donor concentration) are documented
-- [ ] Results are not over-interpreted beyond what the data support
-
----
-
-## Outputs
-
-### Tables
-
-Per-cluster differential expression results:
-
-```text
-results/tables/phase6_[CLUSTER]_DE_results.csv
-```
-
-Containing columns:
-
-```text
-Gene
-log2FC
-p_value
-FDR_adjusted_p_value
-Mean_PseudoBulk_Expression_GroupA
-Mean_PseudoBulk_Expression_GroupB
-Significant_FDR_0.05
-```
-
-### Figures
-
-Per-cluster, per-contrast visualizations:
-
-```text
-results/figures/phase6_[CLUSTER]_[CONTRAST]_volcano.png
-results/figures/phase6_[CLUSTER]_top_DE_genes_heatmap.png
-results/figures/phase6_[CLUSTER]_[CONTRAST]_donor_expression_plot.png
-```
-
-### Model Diagnostics
-
-Per-cluster:
-
-```text
-results/figures/phase6_[CLUSTER]_residual_diagnostics.png
-results/tables/phase6_[CLUSTER]_model_fit_summary.csv
-```
-
----
-
-## Relationship to Subsequent Phases
-
-Phase 6 identifies genes and programs that differ across clinical groups **at the level of transcriptional state and abundance.**
-
-### Phase 7 — Pathway Enrichment
-
-Phase 7 takes the Phase 6 DE gene lists and:
-
-* Maps genes to biological pathways (KEGG, Reactome, GO)
-* Identifies enriched pathways per cluster per contrast
-* Contextualizes individual gene changes within broader biological processes
-
-### Phase 8 — Cell-Cell Communication
-
-Phase 8 uses all phases (including Phase 6 DE results) to:
-
-* Predict myeloid-lymphoid interactions via ligand-receptor pairs
-* Model communication networks across clusters
-* Suggest functional consequences of cluster-state changes
-
-### Phase 9 — Integrated Interpretation
-
-Phase 9 synthesizes results from all phases to:
-
-* Construct a coherent narrative of intrahepatic myeloid biology across HBV states
-* Distinguish robust, multi-donor signals from outlier-driven artifacts
-* Propose testable hypotheses for experimental validation
+Instead, populations with weaker or conflicting evidence are explicitly flagged and interpreted conservatively.
 
 ---
 
 ## Interpretation Philosophy
 
-Phase 6 uses statistics to estimate, not dictate, biological reality.
+This phase deliberately follows a simple principle:
 
-A gene with FDR < 0.05 and |log2FC| > 0.5 is **likely to be true in this cohort** — but not necessarily in other cohorts or in functional assays.
+> **Do not force the biology to look cleaner than the data.**
 
-A gene with FDR > 0.05 is **not detected in this cohort** — but may still be biologically important if the effect is small or donor variance is high.
+A computational cluster is not automatically a biological cell state.
 
-Outlier donors (like P190719) are not artifacts to be hidden; they are part of the biological reality of human disease.
+A marker is not automatically a cell identity.
 
-Therefore, Phase 6 results are presented with explicit acknowledgment of:
+A cell count is not automatically a biological replicate.
 
-* Which donors drive observed effects
-* Which effects disappear when outliers are removed
-* Which signals are robust across independent individuals
-* Which findings are cluster-specific versus shared
+A transcriptional association is not automatically a mechanism.
 
----
+And a predicted or inferred identity is not automatically a demonstrated function.
 
-## Final Status
+The goal of Phase 5 is therefore not to maximize the number of named cell types.
 
-Phase 6 is the **first statistical-inference phase** in the project.
-
-It addresses **whether observed transcriptional differences between clinical groups are statistically supported when donor structure is properly modeled.**
-
-The results feed into Phase 7 (pathway), Phase 8 (interaction), and Phase 9 (integration).
+The goal is to produce a **defensible representation of the transcriptional structure actually supported by the dataset**, while preserving uncertainty for downstream analysis.
 
 ---
 
-**Phase 6 — In development**
+## Software
 
-**Expected outputs:** Differential expression tables and visualizations per cluster per clinical-state contrast, with explicit donor-level caveats and sensitivity analyses.
+**Core analysis performed using:**
+
+- R
+- Seurat 5.5.1
+- SeuratObject 5.4.0
+- dplyr
+- tidyr
+- tibble
+- stringr
+- Matrix
+- ggplot2
+
+Exact package versions are recorded in the project environment/session information.
+
+---
+
+## Project Position
+
+Phase 5 is part of a broader multi-phase analysis of intrahepatic immune transcriptional states in chronic HBV.
+
+```
+Phase 0 — Pre-analysis audit
+        ↓
+Phase 1 — Input/data understanding
+        ↓
+Phase 2 — QC object construction
+        ↓
+Phase 3 — Broad immune atlas
+        ↓
+Phase 4 — CD8 T-cell state analysis
+        ↓
+Phase 5 — Myeloid state analysis
+        ↓
+Phase 6 — Donor-aware differential abundance/state analysis
+        ↓
+Phase 7 — Pathway enrichment
+        ↓
+Phase 8 — Predicted cell-cell communication
+        ↓
+Phase 9 — Integrated interpretation
+```
+
+Phase 5 therefore provides the **myeloid state framework** used by subsequent donor-aware analyses.
+
+---
+
+## Status
+
+### ✅ Phase 5 — COMPLETE
+
+**Final dataset:**
+
+```
+2,489 myeloid-compartment cells
+24,452 genes
+23 donors
+5 clinical states
+5 computational clusters
+5 cluster-level biological annotations
+4 clusters eligible for interpretation as myeloid-associated states
+1 platelet-associated/non-myeloid-associated population
+```
+
+The final annotations are intentionally conservative and are designed to support, rather than pre-empt, the donor-aware analyses performed in Phase 6.
+
+---
+
+**Phase 5 README updated:** September 2026  
+**Analysis scope:** Myeloid compartment transcriptional state discovery and biological adjudication  
+**Inference unit:** Donor for downstream clinical-state inference  
+**Biological interpretation:** Exploratory and observational
