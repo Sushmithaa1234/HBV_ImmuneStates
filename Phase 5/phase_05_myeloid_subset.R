@@ -4330,3 +4330,457 @@ cat(
   "\n"
 )
 cat("============================================================\n")
+
+# ============================================================
+# PHASE 5 — FINAL BIOLOGICAL ANNOTATION TABLE
+# ============================================================
+# Purpose:
+#   Create the final cluster-level biological adjudication table
+#   from the evidence generated during Phase 5.
+#
+# Important:
+#   These are biological annotations of computational clusters.
+#   They are NOT clinical-state conclusions.
+#
+# Donor = biological replicate.
+# Cells = units for state discovery / annotation.
+# ============================================================
+
+library(dplyr)
+library(tibble)
+library(readr)
+
+# ------------------------------------------------------------
+# 1. Define final biological adjudication
+# ------------------------------------------------------------
+
+phase5_final_annotations <- tibble(
+  
+  Myeloid_Cluster = as.character(0:4),
+  
+  Biological_Annotation = c(
+    "Inflammatory monocyte-associated population",
+    "Activated/antigen-presenting monocyte-associated population",
+    "Antigen-presenting myeloid population",
+    "FCGR3A-associated myeloid population",
+    "Platelet-associated population"
+  ),
+  
+  Lineage_Category = c(
+    "Monocyte_associated",
+    "Monocyte_associated",
+    "Myeloid_associated",
+    "Myeloid_associated",
+    "Non_myeloid_associated"
+  ),
+  
+  Biological_Annotation_Confidence = c(
+    "High",
+    "High",
+    "Moderate-High",
+    "Moderate",
+    "High"
+  ),
+  
+  Donor_Representation_Interpretation = c(
+    "Strongly donor concentrated",
+    "Broad donor representation",
+    "Broad donor representation",
+    "Strongly donor concentrated",
+    "Extremely donor concentrated"
+  ),
+  
+  Interpretation_Eligible_As_Myeloid_State = c(
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    FALSE
+  ),
+  
+  Evidence_Summary = c(
+    paste(
+      "Strong inflammatory monocyte-associated evidence:",
+      "S100A8/S100A12, CCR2, FCN1, CD14 and VCAN.",
+      "Coherent core myeloid and antigen-presentation programs.",
+      "No substantial lymphoid signal."
+    ),
+    
+    paste(
+      "Activated monocyte-associated population with strong",
+      "HLA-II/CD74 antigen-presentation signal and markers including",
+      "IL1A, SERPINB2, C15orf48, GPR183 and IL1R2."
+    ),
+    
+    paste(
+      "Strong core myeloid and HLA-II/CD74 antigen-presentation",
+      "programs with comparatively weak macrophage-associated",
+      "program. Evidence supports a myeloid population but does",
+      "not justify forcing a specific macrophage identity."
+    ),
+    
+    paste(
+      "FCGR3A/CX3CR1/MS4A4A-associated myeloid population with",
+      "strong HLA-II and core myeloid signal. Mixed granulocyte-",
+      "associated signal and donor concentration warrant conservative",
+      "annotation."
+    ),
+    
+    paste(
+      "Dominated by platelet-associated markers including PF4, PPBP,",
+      "TUBB1, ITGA2B, GP9, TREML1, MPIG6B and PF4V1.",
+      "This population should not be interpreted as a myeloid state.",
+      "Because the dataset contains processed log-CP10K expression",
+      "rather than raw counts, a definitive doublet call is not made."
+    )
+  ),
+  
+  Interpretation_Boundary = c(
+    "Do not interpret as a clinical-state-specific inflammatory population without donor-aware Phase 6 analysis.",
+    
+    "Activation and antigen-presentation are transcriptional descriptors; do not infer causality, pathogenicity or clinical-state specificity.",
+    
+    "Do not relabel as macrophage, Kupffer cell, DC or disease-associated macrophage without stronger lineage evidence.",
+    
+    "Do not force a neutrophil or dendritic-cell identity despite some associated markers; donor concentration limits cohort-level interpretation.",
+    
+    "Treat as a platelet-associated/non-myeloid population. Do not interpret as a biological myeloid state or make a definitive doublet claim."
+  )
+)
+
+# ------------------------------------------------------------
+# 2. Add cluster sizes from the actual object
+# ------------------------------------------------------------
+
+cluster_sizes <- myeloid_obj@meta.data %>%
+  count(Myeloid_Cluster, name = "Cells") %>%
+  mutate(Myeloid_Cluster = as.character(Myeloid_Cluster))
+
+phase5_final_annotations <- phase5_final_annotations %>%
+  left_join(
+    cluster_sizes,
+    by = "Myeloid_Cluster"
+  ) %>%
+  select(
+    Myeloid_Cluster,
+    Cells,
+    Biological_Annotation,
+    Lineage_Category,
+    Biological_Annotation_Confidence,
+    Donor_Representation_Interpretation,
+    Interpretation_Eligible_As_Myeloid_State,
+    Evidence_Summary,
+    Interpretation_Boundary
+  )
+
+# ------------------------------------------------------------
+# 3. Validate that every computational cluster has exactly one
+#    biological annotation
+# ------------------------------------------------------------
+
+stopifnot(
+  nrow(phase5_final_annotations) == 5
+)
+
+stopifnot(
+  setequal(
+    phase5_final_annotations$Myeloid_Cluster,
+    as.character(sort(unique(myeloid_obj$Myeloid_Cluster)))
+  )
+)
+
+stopifnot(
+  !anyDuplicated(phase5_final_annotations$Myeloid_Cluster)
+)
+
+stopifnot(
+  !any(is.na(phase5_final_annotations$Biological_Annotation))
+)
+
+# ------------------------------------------------------------
+# 4. Print final table
+# ------------------------------------------------------------
+
+print(phase5_final_annotations, n = Inf)
+
+# ------------------------------------------------------------
+# 5. Save final table
+# ------------------------------------------------------------
+
+write_csv(
+  phase5_final_annotations,
+  file.path(
+    table_dir,
+    "phase5_myeloid_final_biological_annotations.csv"
+  )
+)
+
+cat("\n============================================================\n")
+cat("PHASE 5 FINAL BIOLOGICAL ANNOTATION TABLE SAVED\n")
+cat("============================================================\n")
+cat("Clusters:", nrow(phase5_final_annotations), "\n")
+cat(
+  "Myeloid-interpretable clusters:",
+  sum(phase5_final_annotations$Interpretation_Eligible_As_Myeloid_State),
+  "\n"
+)
+cat(
+  "Non-myeloid-associated cluster:",
+  sum(!phase5_final_annotations$Interpretation_Eligible_As_Myeloid_State),
+  "\n"
+)
+cat(
+  "Output:",
+  file.path(
+    table_dir,
+    "phase5_myeloid_final_biological_annotations.csv"
+  ),
+  "\n"
+)
+cat("============================================================\n")
+
+# ============================================================
+# PHASE 5 — APPLY FINAL BIOLOGICAL ANNOTATIONS TO SEURAT OBJECT
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Create named annotation vectors from the final table
+# ------------------------------------------------------------
+
+annotation_map <- setNames(
+  phase5_final_annotations$Biological_Annotation,
+  phase5_final_annotations$Myeloid_Cluster
+)
+
+lineage_map <- setNames(
+  phase5_final_annotations$Lineage_Category,
+  phase5_final_annotations$Myeloid_Cluster
+)
+
+confidence_map <- setNames(
+  phase5_final_annotations$Biological_Annotation_Confidence,
+  phase5_final_annotations$Myeloid_Cluster
+)
+
+donor_map <- setNames(
+  phase5_final_annotations$Donor_Representation_Interpretation,
+  phase5_final_annotations$Myeloid_Cluster
+)
+
+eligible_map <- setNames(
+  phase5_final_annotations$Interpretation_Eligible_As_Myeloid_State,
+  phase5_final_annotations$Myeloid_Cluster
+)
+
+# ------------------------------------------------------------
+# 2. Map annotations to every cell
+# ------------------------------------------------------------
+
+cell_clusters <- as.character(myeloid_obj$Myeloid_Cluster)
+
+final_annotation_vector <- unname(
+  annotation_map[cell_clusters]
+)
+
+final_lineage_vector <- unname(
+  lineage_map[cell_clusters]
+)
+
+final_confidence_vector <- unname(
+  confidence_map[cell_clusters]
+)
+
+final_donor_vector <- unname(
+  donor_map[cell_clusters]
+)
+
+final_eligible_vector <- unname(
+  eligible_map[cell_clusters]
+)
+
+names(final_annotation_vector) <- colnames(myeloid_obj)
+names(final_lineage_vector) <- colnames(myeloid_obj)
+names(final_confidence_vector) <- colnames(myeloid_obj)
+names(final_donor_vector) <- colnames(myeloid_obj)
+names(final_eligible_vector) <- colnames(myeloid_obj)
+
+# ------------------------------------------------------------
+# 3. Add metadata safely
+# ------------------------------------------------------------
+
+myeloid_obj <- AddMetaData(
+  myeloid_obj,
+  metadata = final_annotation_vector,
+  col.name = "Myeloid_Biological_Annotation"
+)
+
+myeloid_obj <- AddMetaData(
+  myeloid_obj,
+  metadata = final_lineage_vector,
+  col.name = "Myeloid_Lineage_Category"
+)
+
+myeloid_obj <- AddMetaData(
+  myeloid_obj,
+  metadata = final_confidence_vector,
+  col.name = "Myeloid_Annotation_Confidence"
+)
+
+myeloid_obj <- AddMetaData(
+  myeloid_obj,
+  metadata = final_donor_vector,
+  col.name = "Myeloid_Donor_Representation"
+)
+
+myeloid_obj <- AddMetaData(
+  myeloid_obj,
+  metadata = final_eligible_vector,
+  col.name = "Myeloid_Interpretation_Eligible"
+)
+
+# ------------------------------------------------------------
+# 4. Add analysis-level metadata
+# ------------------------------------------------------------
+
+myeloid_obj$Phase5_Analysis <- "Myeloid_state_discovery_and_biological_adjudication"
+myeloid_obj$Phase5_Expression <- "Processed_log_CP10K"
+myeloid_obj$Phase5_Donor_Unit <- "Biological_replicate"
+myeloid_obj$Phase5_Inference <- "Exploratory_cell_state_characterization"
+
+# ------------------------------------------------------------
+# 5. Validate annotation coverage
+# ------------------------------------------------------------
+
+stopifnot(
+  length(final_annotation_vector) == ncol(myeloid_obj)
+)
+
+stopifnot(
+  identical(
+    names(final_annotation_vector),
+    colnames(myeloid_obj)
+  )
+)
+
+stopifnot(
+  !any(is.na(myeloid_obj$Myeloid_Biological_Annotation))
+)
+
+stopifnot(
+  !any(is.na(myeloid_obj$Myeloid_Lineage_Category))
+)
+
+stopifnot(
+  !any(is.na(myeloid_obj$Myeloid_Annotation_Confidence))
+)
+
+# Validate one biological annotation per computational cluster
+cluster_annotation_check <- myeloid_obj@meta.data %>%
+  distinct(
+    Myeloid_Cluster,
+    Myeloid_Biological_Annotation
+  )
+
+stopifnot(
+  nrow(cluster_annotation_check) == 5
+)
+
+stopifnot(
+  setequal(
+    as.character(cluster_annotation_check$Myeloid_Cluster),
+    as.character(sort(unique(myeloid_obj$Myeloid_Cluster)))
+  )
+)
+
+cat(
+  "\nBiological annotation coverage validated:",
+  nrow(cluster_annotation_check),
+  "computational clusters annotated;",
+  length(unique(cluster_annotation_check$Myeloid_Biological_Annotation)),
+  "unique biological annotation categories.\n"
+)
+
+# ------------------------------------------------------------
+# 6. Validate Seurat object
+# ------------------------------------------------------------
+
+validObject(myeloid_obj, test = TRUE)
+
+cat("\nSeurat object validity check PASSED.\n")
+
+# ------------------------------------------------------------
+# 7. Save FINAL annotated RDS
+# ------------------------------------------------------------
+
+final_rds_path <- file.path(
+  rds_dir,
+  "phase5_final_myeloid_analysis_adjudicated.rds"
+)
+
+saveRDS(
+  myeloid_obj,
+  final_rds_path
+)
+
+cat("\n============================================================\n")
+cat("PHASE 5 FINAL ANNOTATED RDS SAVED\n")
+cat("============================================================\n")
+cat("Cells:", ncol(myeloid_obj), "\n")
+cat("Features:", nrow(myeloid_obj), "\n")
+cat(
+  "Computational clusters:",
+  length(unique(myeloid_obj$Myeloid_Cluster)),
+  "\n"
+)
+cat(
+  "Biological annotation categories:",
+  length(unique(myeloid_obj$Myeloid_Biological_Annotation)),
+  "\n"
+)
+cat(
+  "RDS:",
+  final_rds_path,
+  "\n"
+)
+cat("============================================================\n")
+
+# ------------------------------------------------------------
+# 8. Reload validation
+# ------------------------------------------------------------
+
+myeloid_final_check <- readRDS(final_rds_path)
+
+stopifnot(
+  ncol(myeloid_final_check) == 2489
+)
+
+stopifnot(
+  nrow(myeloid_final_check) == 24452
+)
+
+stopifnot(
+  "Myeloid_Biological_Annotation" %in%
+    colnames(myeloid_final_check@meta.data)
+)
+
+stopifnot(
+  !any(
+    is.na(
+      myeloid_final_check$Myeloid_Biological_Annotation
+    )
+  )
+)
+
+validObject(
+  myeloid_final_check,
+  test = TRUE
+)
+
+cat("\nFINAL RELOAD VALIDATION PASSED.\n")
+cat(
+  "Final annotated object contains",
+  ncol(myeloid_final_check),
+  "cells and",
+  nrow(myeloid_final_check),
+  "features.\n"
+)
