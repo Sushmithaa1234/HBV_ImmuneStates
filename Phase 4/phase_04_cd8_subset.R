@@ -3670,8 +3670,8 @@ if (
 #
 # Multiple computational clusters may legitimately share the same
 # biological annotation. Therefore, the correct validation is that
-# every one of the 16 clusters has a non-missing annotation, NOT
-# that there are 16 unique annotation strings.
+# every one of the 16 clusters has exactly one non-missing annotation,
+# NOT that there are 16 unique annotation strings.
 
 cluster_annotation_check <- cd8_obj@meta.data %>%
   dplyr::distinct(
@@ -3689,7 +3689,6 @@ if (
   )
 }
 
-
 if (
   any(
     is.na(
@@ -3703,7 +3702,6 @@ if (
     "has a missing biological annotation."
   )
 }
-
 
 message(
   "Biological annotation coverage validated: ",
