@@ -1,160 +1,251 @@
-# ============================================================
-# PHASE 4: CD8 T-CELL ANALYSIS
-# Script 04: CD8 subset
+###############################################################################
+# HBV scRNA-seq PROJECT
+# PHASE 4 — CD8 T-CELL TRANSCRIPTIONAL STATE ANALYSIS
+###############################################################################
 #
-# Goal:
-# Isolate and characterize CD8 T-cell states across
-# HBV clinical states.
+# Dataset
+# -------
+# GEO: GSE182159
+# Tissue: Liver
+# Donors: 23
+# Clinical states: NL, IT, IA, AR, AC
 #
-# Section 1: Setup and reproducibility
-# ============================================================
+# Biological objective
+# --------------------
+# Characterize transcriptional heterogeneity within the intrahepatic CD8
+# T-cell compartment across the five GEO-defined clinical states.
+#
+# Phase 4 scope
+# -------------
+# Phase 4 is a cell-state discovery and biological adjudication phase.
+# It characterizes transcriptional heterogeneity within the Phase 3
+# CD8-labelled compartment.
+#
+# Clinical-state inference is intentionally NOT performed here.
+# Donor-aware differential analysis is reserved for Phase 6.
+#
+# Scientific principles
+# ---------------------
+# 1.  Donor = biological replicate.
+# 2.  Cells are measurement units for state discovery and annotation.
+# 3.  Clinical-state inference is NOT performed in Phase 4.
+# 4.  Phase 6 performs donor-aware differential analysis.
+# 5.  GEO matrices contain processed log-CP10K expression, not raw counts.
+# 6.  Expression is never reverse-transformed into pseudo-counts.
+# 7.  NormalizeData() is not used.
+# 8.  DESeq2/edgeR are not applied to reconstructed counts.
+# 9.  No integration, Harmony, or batch correction is performed.
+# 10. No pathway enrichment is performed.
+# 11. No CellChat analysis is performed.
+# 12. Biological interpretations must be supported by observed markers and/or
+#     transcriptional programs.
+# 13. Ambiguous populations remain explicitly ambiguous.
+# 14. Clinical-state composition is descriptive only.
+# 15. No causal claims are made.
+# 16. New Seurat metadata are added with AddMetaData() using cell-indexed
+#     vectors; @meta.data is never replaced wholesale.
+#
+# Input
+# -----
+# results/rds_objects/phase3_final_full_dataset.rds
+#
+# Primary output
+# --------------
+# results/rds_objects/phase4_final_cd8_analysis.rds
+#
+# Final adjudicated output
+# ------------------------
+# results/rds_objects/phase4_final_cd8_analysis_adjudicated.rds
+#
+# Additional outputs
+# ------------------
+# results/rds_objects/phase4_cd8_source_layers_preserved.rds
+# results/tables/phase4_cd8_*.csv
+# results/figures/phase4_cd8_*.png
+#
+###############################################################################
 
 
-# ------------------------------------------------------------
-# 1.1 Load required libraries
-# ------------------------------------------------------------
+############################
+# 1. SETUP
+############################
 
-library(Seurat)
-library(SeuratObject)
-library(tidyverse)
-library(here)
-library(Matrix)
+suppressPackageStartupMessages({
+  
+  library(Seurat)
+  library(SeuratObject)
+  
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(stringr)
+  
+  library(Matrix)
+  
+  library(ggplot2)
+})
 
+set.seed(20260916)
 
-# ------------------------------------------------------------
-# 1.2 Set project root
-# ------------------------------------------------------------
+project_root <- getwd()
 
-setwd(here())
-
-
-# ------------------------------------------------------------
-# 1.3 Reproducibility
-# ------------------------------------------------------------
-
-set.seed(12345)
-
-
-# ------------------------------------------------------------
-# 1.4 Define input/output paths
-# ------------------------------------------------------------
-
-phase3_final_path <- here(
-  "results",
-  "rds_objects",
-  "phase3_final_full_dataset.rds"
-)
-
-output_rds_dir <- here(
+rds_dir <- file.path(
+  project_root,
   "results",
   "rds_objects"
 )
 
-output_table_dir <- here(
+table_dir <- file.path(
+  project_root,
   "results",
   "tables"
 )
 
-output_figure_dir <- here(
+figure_dir <- file.path(
+  project_root,
   "results",
   "figures"
 )
 
-
-# ------------------------------------------------------------
-# 1.5 Create output directories if needed
-# ------------------------------------------------------------
-
 dir.create(
-  output_rds_dir,
+  rds_dir,
   recursive = TRUE,
   showWarnings = FALSE
 )
 
 dir.create(
-  output_table_dir,
+  table_dir,
   recursive = TRUE,
   showWarnings = FALSE
 )
 
 dir.create(
-  output_figure_dir,
+  figure_dir,
   recursive = TRUE,
   showWarnings = FALSE
 )
 
+input_file <- file.path(
+  rds_dir,
+  "phase3_final_full_dataset.rds"
+)
 
-# ------------------------------------------------------------
-# 1.6 Confirm project structure
-# ------------------------------------------------------------
+source_layer_output <- file.path(
+  rds_dir,
+  "phase4_cd8_source_layers_preserved.rds"
+)
 
-stopifnot(
-  dir.exists(here("results")),
-  dir.exists(output_rds_dir),
-  dir.exists(output_table_dir),
-  dir.exists(output_figure_dir),
-  file.exists(phase3_final_path)
+final_output <- file.path(
+  rds_dir,
+  "phase4_final_cd8_analysis.rds"
+)
+
+message("============================================================")
+message("PHASE 4: CD8 T-CELL TRANSCRIPTIONAL STATE ANALYSIS")
+message("============================================================")
+message("Input:  ", input_file)
+message("Output: ", final_output)
+
+
+###############################################################################
+# 2. LOAD PHASE 3 OBJECT
+###############################################################################
+
+if (!file.exists(input_file)) {
+  
+  stop(
+    "Phase 3 object not found:\n",
+    input_file
+  )
+}
+
+seurat_obj <- readRDS(
+  input_file
+)
+
+if (!inherits(seurat_obj, "Seurat")) {
+  
+  stop(
+    "Input object is not a Seurat object."
+  )
+}
+
+DefaultAssay(seurat_obj) <- "RNA"
+
+message("\nPhase 3 object loaded.")
+
+message(
+  "Cells: ",
+  ncol(seurat_obj)
+)
+
+message(
+  "Features: ",
+  nrow(seurat_obj)
 )
 
 
-# ------------------------------------------------------------
-# 1.7 Analysis constants
-# ------------------------------------------------------------
+###############################################################################
+# 3. VALIDATE PHASE 3 OBJECT
+###############################################################################
 
-target_cell_type <- "CD8_T"
+expected_total_cells <- 106592L
+expected_total_features <- 24452L
 
-analysis_seed <- 12345
+if (ncol(seurat_obj) != expected_total_cells) {
+  
+  stop(
+    "Unexpected Phase 3 cell count.\n",
+    "Expected: ",
+    expected_total_cells,
+    "\nFound: ",
+    ncol(seurat_obj)
+  )
+}
 
-message("============================================================")
-message("PHASE 4: CD8 T-CELL ANALYSIS")
-message("============================================================")
-message("Project root: ", here())
-message("Input object: ", phase3_final_path)
-message("Target population: ", target_cell_type)
-message("Random seed: ", analysis_seed)
-message("============================================================")
-
-# ============================================================
-# 2. LOAD AND VALIDATE PHASE 3 FINAL DATASET
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 2.1 Load final Phase 3 object
-# ------------------------------------------------------------
-
-seurat_obj <- readRDS(phase3_final_path)
-
-
-# ------------------------------------------------------------
-# 2.2 Basic object validation
-# ------------------------------------------------------------
-
-message("Checking Phase 3 final dataset...")
-
-stopifnot(
-  inherits(seurat_obj, "Seurat"),
-  ncol(seurat_obj) == 105220,
-  nrow(seurat_obj) == 18925
-)
+if (nrow(seurat_obj) != expected_total_features) {
+  
+  stop(
+    "Unexpected Phase 3 feature count.\n",
+    "Expected: ",
+    expected_total_features,
+    "\nFound: ",
+    nrow(seurat_obj)
+  )
+}
 
 
-# ------------------------------------------------------------
-# 2.3 Required metadata validation
-# ------------------------------------------------------------
-
-# ------------------------------------------------------------
-# 2.3 Required metadata validation
-# ------------------------------------------------------------
+###############################################################################
+# 4. REQUIRED PHASE 3 METADATA
+###############################################################################
 
 required_metadata <- c(
+  
   "GSM",
   "Donor",
   "Phase",
-  "Transferred_Label",
+  
+  "Genes_Detected",
+  "Mito_Genes_Detected",
+  "Mito_Detection_Fraction",
+  
+  "Ribo_Genes_Detected",
+  "Ribo_Detection_Fraction",
+  
+  "Total_LogCP10K",
+  
+  "QC_LowGenes",
+  "QC_Pass",
+  "Potential_HighComplexity",
+  
+  "Transferred_Atlas_Cluster",
+  "Final_Cell_Type",
+  
+  "Transfer_Agreement",
+  "Transfer_SecondBest_Agreement",
+  "Transfer_Agreement_Margin",
+  
   "Transfer_Confidence",
-  "Neighbour_Agreement",
-  "Label_Margin",
   "Low_Confidence"
 )
 
@@ -164,15 +255,20 @@ missing_metadata <- setdiff(
 )
 
 if (length(missing_metadata) > 0) {
+  
   stop(
-    "Missing required metadata columns: ",
-    paste(missing_metadata, collapse = ", ")
+    "Missing required Phase 3 metadata:\n",
+    paste(
+      missing_metadata,
+      collapse = ", "
+    )
   )
 }
 
-# ------------------------------------------------------------
-# 2.4 Validate clinical phases
-# ------------------------------------------------------------
+
+###############################################################################
+# 5. VALIDATE DONORS, SAMPLES AND CLINICAL STATES
+###############################################################################
 
 expected_phases <- c(
   "NL",
@@ -182,2355 +278,1355 @@ expected_phases <- c(
   "AC"
 )
 
-observed_phases <- sort(unique(seurat_obj$Phase))
+observed_phases <- sort(
+  unique(
+    as.character(
+      seurat_obj$Phase
+    )
+  )
+)
 
-if (!setequal(observed_phases, expected_phases)) {
+if (!setequal(
+  observed_phases,
+  expected_phases
+)) {
+  
   stop(
-    "Unexpected clinical phases detected: ",
-    paste(observed_phases, collapse = ", ")
+    "Unexpected clinical-state labels.\n",
+    "Observed: ",
+    paste(
+      observed_phases,
+      collapse = ", "
+    ),
+    "\nExpected: ",
+    paste(
+      expected_phases,
+      collapse = ", "
+    )
   )
 }
 
+n_donors <- length(
+  unique(
+    seurat_obj$Donor
+  )
+)
 
-# ------------------------------------------------------------
-# 2.5 Validate donor/sample structure
-# ------------------------------------------------------------
-
-n_donors <- dplyr::n_distinct(seurat_obj$Donor)
-n_gsm <- dplyr::n_distinct(seurat_obj$GSM)
+n_gsm <- length(
+  unique(
+    seurat_obj$GSM
+  )
+)
 
 if (n_donors != 23) {
-  stop("Expected 23 donors; found ", n_donors)
+  
+  stop(
+    "Expected 23 donors; found ",
+    n_donors
+  )
 }
 
 if (n_gsm != 23) {
-  stop("Expected 23 GSM/sample identifiers; found ", n_gsm)
-}
-
-
-# ------------------------------------------------------------
-# 2.6 Validate transferred cell types
-# ------------------------------------------------------------
-
-transferred_labels <- sort(
-  unique(seurat_obj$Transferred_Label)
-)
-
-message(
-  "Transferred cell types: ",
-  paste(transferred_labels, collapse = ", ")
-)
-
-if (!(target_cell_type %in% transferred_labels)) {
+  
   stop(
-    "Target population '",
-    target_cell_type,
-    "' was not found in Transferred_Label."
+    "Expected 23 GSM/sample identifiers; found ",
+    n_gsm
   )
 }
 
-
-# ------------------------------------------------------------
-# 2.7 Count CD8 T cells
-# ------------------------------------------------------------
-
-cd8_n <- sum(
-  seurat_obj$Transferred_Label == target_cell_type,
-  na.rm = TRUE
+message(
+  "\nValidated 23 donors and 23 samples."
 )
 
-if (cd8_n == 0) {
-  stop("No CD8 T cells detected.")
-}
-
-
-# ------------------------------------------------------------
-# 2.8 Confirm no missing transferred labels
-# ------------------------------------------------------------
-
-missing_transferred_labels <- sum(
-  is.na(seurat_obj$Transferred_Label)
-)
-
-if (missing_transferred_labels > 0) {
-  stop(
-    "Found ",
-    missing_transferred_labels,
-    " cells with missing Transferred_Label."
+message(
+  "Clinical states: ",
+  paste(
+    expected_phases,
+    collapse = ", "
   )
-}
-
-
-# ------------------------------------------------------------
-# 2.9 Entry checkpoint summary
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("PHASE 4 ENTRY CHECKPOINT")
-message("============================================================")
-message("Total cells: ", ncol(seurat_obj))
-message("Total genes: ", nrow(seurat_obj))
-message("Donors: ", n_donors)
-message("GSM/sample IDs: ", n_gsm)
-message("Clinical phases: ", paste(expected_phases, collapse = ", "))
-message("CD8 T cells: ", cd8_n)
-message(
-  "CD8 fraction: ",
-  round(100 * cd8_n / ncol(seurat_obj), 2),
-  "%"
 )
-message(
-  "Missing transferred labels: ",
-  missing_transferred_labels
+
+
+###############################################################################
+# 6. PHASE 3 CELL-TYPE SUMMARY
+###############################################################################
+
+phase3_label_summary <- seurat_obj@meta.data %>%
+  
+  dplyr::count(
+    Final_Cell_Type,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::arrange(
+    dplyr::desc(Cells)
+  )
+
+write.csv(
+  phase3_label_summary,
+  file.path(
+    table_dir,
+    "phase4_phase3_Final_Cell_Type_summary.csv"
+  ),
+  row.names = FALSE
 )
-message("============================================================")
 
-# ============================================================
-# 3. EXTRACT CD8 T CELLS
-# ============================================================
+message("\nPhase 3 cell-type summary:")
+print(phase3_label_summary)
 
 
-# ------------------------------------------------------------
-# 3.1 Identify CD8 T-cell barcodes
-# ------------------------------------------------------------
+###############################################################################
+# 7. EXTRACT CD8 T CELLS
+###############################################################################
 
-cd8_cells <- rownames(seurat_obj@meta.data)[
-  seurat_obj$Transferred_Label == target_cell_type
+cd8_cells <- rownames(
+  seurat_obj@meta.data
+)[
+  seurat_obj$Final_Cell_Type == "CD8_T"
 ]
 
-
-# ------------------------------------------------------------
-# 3.2 Validate CD8 cell selection
-# ------------------------------------------------------------
-
-if (length(cd8_cells) != cd8_n) {
+if (length(cd8_cells) == 0) {
+  
   stop(
-    "CD8 cell count mismatch: expected ",
-    cd8_n,
-    " but identified ",
-    length(cd8_cells),
-    " cells."
+    "No cells labeled CD8_T were found in Final_Cell_Type."
   )
 }
 
-if (anyDuplicated(cd8_cells) > 0) {
-  stop("Duplicated cell barcodes detected in CD8 selection.")
-}
-
-
-# ------------------------------------------------------------
-# 3.3 Extract CD8 subset
-# ------------------------------------------------------------
-
 cd8_obj <- subset(
-  x = seurat_obj,
+  seurat_obj,
   cells = cd8_cells
 )
 
+DefaultAssay(cd8_obj) <- "RNA"
 
-# ------------------------------------------------------------
-# 3.4 Validate extracted object
-# ------------------------------------------------------------
+expected_cd8_n <- length(
+  cd8_cells
+)
 
-stopifnot(
-  inherits(cd8_obj, "Seurat"),
-  ncol(cd8_obj) == cd8_n,
-  nrow(cd8_obj) == nrow(seurat_obj)
+message(
+  "\nCD8 subset extracted."
+)
+
+message(
+  "CD8 cells: ",
+  expected_cd8_n
+)
+
+message(
+  "CD8 features: ",
+  nrow(cd8_obj)
 )
 
 
-# ------------------------------------------------------------
-# 3.5 Confirm all extracted cells are CD8 T cells
-# ------------------------------------------------------------
+###############################################################################
+# 8. VALIDATE CD8 CELL COUNT
+###############################################################################
 
-if (!all(cd8_obj$Transferred_Label == target_cell_type)) {
+#
+# Phase 3 finalized CD8 count should be 41,281.
+#
+
+if (expected_cd8_n != 41281L) {
+  
   stop(
-    "Extracted object contains cells that are not labelled CD8_T."
+    "Unexpected CD8 cell count.\n",
+    "Expected: 41281\n",
+    "Found: ",
+    expected_cd8_n
+  )
+}
+
+if (!identical(
+  colnames(cd8_obj),
+  rownames(cd8_obj@meta.data)
+)) {
+  
+  stop(
+    "Initial CD8 object has inconsistent cell names between the object ",
+    "and metadata."
   )
 }
 
 
-# ------------------------------------------------------------
-# 3.6 Confirm required provenance metadata survived
-# ------------------------------------------------------------
+###############################################################################
+# 9. SAVE CD8 SOURCE-LAYER VERSION
+###############################################################################
 
-required_cd8_metadata <- c(
-  "GSM",
-  "Donor",
-  "Phase",
-  "Transferred_Label",
-  "Transfer_Confidence",
-  "Neighbour_Agreement",
-  "Label_Margin",
-  "Low_Confidence"
-)
-
-missing_cd8_metadata <- setdiff(
-  required_cd8_metadata,
-  colnames(cd8_obj@meta.data)
-)
-
-if (length(missing_cd8_metadata) > 0) {
-  stop(
-    "CD8 object is missing required metadata: ",
-    paste(missing_cd8_metadata, collapse = ", ")
-  )
-}
-
-
-# ------------------------------------------------------------
-# 3.7 CD8 clinical-state composition
-# ------------------------------------------------------------
-
-cd8_phase_counts <- cd8_obj@meta.data |>
-  dplyr::count(Phase, name = "CD8_Cell_Count") |>
-  dplyr::arrange(match(Phase, c("NL", "IT", "IA", "AR", "AC")))
-
-
-# ------------------------------------------------------------
-# 3.8 CD8 donor/sample representation
-# ------------------------------------------------------------
-
-cd8_donor_counts <- cd8_obj@meta.data |>
-  dplyr::count(
-    Phase,
-    Donor,
-    GSM,
-    name = "CD8_Cell_Count"
-  ) |>
-  dplyr::arrange(
-    match(Phase, c("NL", "IT", "IA", "AR", "AC")),
-    Donor
-  )
-
-
-# ------------------------------------------------------------
-# 3.9 Print extraction checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("CD8 EXTRACTION CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("Genes: ", nrow(cd8_obj))
-message("Clinical states represented: ", dplyr::n_distinct(cd8_obj$Phase))
-message("Donors represented: ", dplyr::n_distinct(cd8_obj$Donor))
-message("")
-message("CD8 cells by clinical state:")
-print(cd8_phase_counts)
-message("")
-message("CD8 cells by donor/sample:")
-print(cd8_donor_counts)
-message("============================================================")
-
-# ============================================================
-# 4. CD8 SUBSET QC CHARACTERIZATION
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 4.1 Validate existing QC metadata
-# ------------------------------------------------------------
-
-required_qc_metadata <- c(
-  "nCount_RNA",
-  "nFeature_RNA",
-  "percent.mt",
-  "RNA_complexity",
-  "QC_Flag",
-  "QC_Pass",
-  "scDblFinder.score",
-  "scDblFinder.class",
-  "Potential_Doublet"
-)
-
-missing_qc_metadata <- setdiff(
-  required_qc_metadata,
-  colnames(cd8_obj@meta.data)
-)
-
-if (length(missing_qc_metadata) > 0) {
-  stop(
-    "CD8 object is missing required QC metadata: ",
-    paste(missing_qc_metadata, collapse = ", ")
-  )
-}
-
-
-# ------------------------------------------------------------
-# 4.2 Confirm CD8 subset passed original QC
-# ------------------------------------------------------------
-
-cd8_qc_flag_table <- table(
-  cd8_obj$QC_Pass,
-  useNA = "ifany"
-)
-
-cd8_qc_flag_table
-
-
-# ------------------------------------------------------------
-# 4.3 Confirm doublet status
-# ------------------------------------------------------------
-
-cd8_doublet_table <- table(
-  cd8_obj$scDblFinder.class,
-  useNA = "ifany"
-)
-
-cd8_doublet_table
-
-
-# ------------------------------------------------------------
-# 4.4 Summarize continuous QC metrics
-# ------------------------------------------------------------
-
-cd8_qc_summary <- cd8_obj@meta.data |>
-  dplyr::summarise(
-    Cells = dplyr::n(),
-    
-    nCount_RNA_Median = median(nCount_RNA, na.rm = TRUE),
-    nCount_RNA_Mean = mean(nCount_RNA, na.rm = TRUE),
-    nCount_RNA_Min = min(nCount_RNA, na.rm = TRUE),
-    nCount_RNA_Max = max(nCount_RNA, na.rm = TRUE),
-    
-    nFeature_RNA_Median = median(nFeature_RNA, na.rm = TRUE),
-    nFeature_RNA_Mean = mean(nFeature_RNA, na.rm = TRUE),
-    nFeature_RNA_Min = min(nFeature_RNA, na.rm = TRUE),
-    nFeature_RNA_Max = max(nFeature_RNA, na.rm = TRUE),
-    
-    percent_mt_Median = median(percent.mt, na.rm = TRUE),
-    percent_mt_Mean = mean(percent.mt, na.rm = TRUE),
-    percent_mt_Min = min(percent.mt, na.rm = TRUE),
-    percent_mt_Max = max(percent.mt, na.rm = TRUE),
-    
-    RNA_complexity_Median = median(RNA_complexity, na.rm = TRUE),
-    RNA_complexity_Mean = mean(RNA_complexity, na.rm = TRUE),
-    RNA_complexity_Min = min(RNA_complexity, na.rm = TRUE),
-    RNA_complexity_Max = max(RNA_complexity, na.rm = TRUE)
-  )
-
-print(cd8_qc_summary)
-
-
-# ------------------------------------------------------------
-# 4.5 QC summary by clinical state
-# ------------------------------------------------------------
-
-cd8_qc_by_phase <- cd8_obj@meta.data |>
-  dplyr::group_by(Phase) |>
-  dplyr::summarise(
-    Cells = dplyr::n(),
-    
-    Median_nCount_RNA = median(
-      nCount_RNA,
-      na.rm = TRUE
-    ),
-    
-    Median_nFeature_RNA = median(
-      nFeature_RNA,
-      na.rm = TRUE
-    ),
-    
-    Median_percent_mt = median(
-      percent.mt,
-      na.rm = TRUE
-    ),
-    
-    Median_RNA_complexity = median(
-      RNA_complexity,
-      na.rm = TRUE
-    ),
-    
-    Doublet_Rate = mean(
-      scDblFinder.class == "doublet",
-      na.rm = TRUE
-    ),
-    
-    .groups = "drop"
-  ) |>
-  dplyr::arrange(
-    match(
-      Phase,
-      c("NL", "IT", "IA", "AR", "AC")
-    )
-  )
-
-print(cd8_qc_by_phase)
-
-
-# ------------------------------------------------------------
-# 4.6 QC summary by donor
-# ------------------------------------------------------------
-
-cd8_qc_by_donor <- cd8_obj@meta.data |>
-  dplyr::group_by(
-    Phase,
-    Donor,
-    GSM
-  ) |>
-  dplyr::summarise(
-    Cells = dplyr::n(),
-    
-    Median_nCount_RNA = median(
-      nCount_RNA,
-      na.rm = TRUE
-    ),
-    
-    Median_nFeature_RNA = median(
-      nFeature_RNA,
-      na.rm = TRUE
-    ),
-    
-    Median_percent_mt = median(
-      percent.mt,
-      na.rm = TRUE
-    ),
-    
-    Median_RNA_complexity = median(
-      RNA_complexity,
-      na.rm = TRUE
-    ),
-    
-    Doublet_Rate = mean(
-      scDblFinder.class == "doublet",
-      na.rm = TRUE
-    ),
-    
-    .groups = "drop"
-  ) |>
-  dplyr::arrange(
-    match(
-      Phase,
-      c("NL", "IT", "IA", "AR", "AC")
-    ),
-    Donor
-  )
-
-print(cd8_qc_by_donor)
-
-
-# ------------------------------------------------------------
-# 4.7 CD8 transfer-confidence summary
-# ------------------------------------------------------------
-
-cd8_transfer_summary <- cd8_obj@meta.data |>
-  dplyr::count(
-    Transfer_Confidence,
-    Low_Confidence,
-    name = "Cells"
-  ) |>
-  dplyr::arrange(
-    Transfer_Confidence,
-    Low_Confidence
-  )
-
-print(cd8_transfer_summary)
-
-
-# ------------------------------------------------------------
-# 4.8 Save QC tables
-# ------------------------------------------------------------
-
-write.csv(
-  cd8_qc_summary,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_qc_summary.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  cd8_qc_by_phase,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_qc_by_phase.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  cd8_qc_by_donor,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_qc_by_donor.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  cd8_transfer_summary,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_transfer_summary.csv"
-  ),
-  row.names = FALSE
-)
-
-
-# ------------------------------------------------------------
-# 4.9 Checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("CD8 QC CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("QC-pass status:")
-print(cd8_qc_flag_table)
-message("")
-message("Doublet status:")
-print(cd8_doublet_table)
-message("")
-message("Overall QC summary:")
-print(cd8_qc_summary)
-message("")
-message("QC summary by clinical state:")
-print(cd8_qc_by_phase)
-message("============================================================")
-
-# ============================================================
-# 5. LOCK CD8 NORMALIZED EXPRESSION REPRESENTATION
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 5.1 Confirm normalized RNA data layer
-# ------------------------------------------------------------
-
-cd8_rna_layers <- SeuratObject::Layers(
+source_layers <- Layers(
   cd8_obj[["RNA"]]
 )
 
-if (!("data" %in% cd8_rna_layers)) {
-  stop(
-    "Normalized RNA data layer was not found."
+message(
+  "\nRNA layers before joining:"
+)
+
+print(source_layers)
+
+write.csv(
+  data.frame(
+    Layer = source_layers
+  ),
+  file.path(
+    table_dir,
+    "phase4_cd8_source_layers.csv"
+  ),
+  row.names = FALSE
+)
+
+saveRDS(
+  cd8_obj,
+  source_layer_output
+)
+
+message(
+  "Preserved source-layer CD8 object:\n",
+  source_layer_output
+)
+
+
+###############################################################################
+# 10. CD8 DONOR / SAMPLE / CLINICAL-STATE SUMMARY
+###############################################################################
+
+cd8_donor_state_counts <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    Donor,
+    GSM,
+    Phase,
+    name = "CD8_Cells"
+  ) %>%
+  
+  dplyr::arrange(
+    Phase,
+    Donor
+  )
+
+write.csv(
+  cd8_donor_state_counts,
+  file.path(
+    table_dir,
+    "phase4_cd8_donor_state_counts.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 11. CD8 CELLS BY CLINICAL STATE
+###############################################################################
+
+cd8_phase_counts <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    Phase,
+    name = "CD8_Cells"
+  ) %>%
+  
+  dplyr::mutate(
+    Percent_of_All_CD8 =
+      100 * CD8_Cells / sum(CD8_Cells)
+  )
+
+write.csv(
+  cd8_phase_counts,
+  file.path(
+    table_dir,
+    "phase4_cd8_phase_counts.csv"
+  ),
+  row.names = FALSE
+)
+
+message(
+  "\nCD8 cells by clinical state:"
+)
+
+print(cd8_phase_counts)
+
+
+###############################################################################
+# 12. CD8 QC CHARACTERIZATION
+###############################################################################
+
+available_qc <- intersect(
+  c(
+    "Genes_Detected",
+    "Mito_Genes_Detected",
+    "Mito_Detection_Fraction",
+    "Ribo_Genes_Detected",
+    "Ribo_Detection_Fraction",
+    "Total_LogCP10K",
+    "QC_LowGenes",
+    "QC_Pass",
+    "Potential_HighComplexity"
+  ),
+  colnames(cd8_obj@meta.data)
+)
+
+message(
+  "\nAvailable Phase 3 QC metadata:"
+)
+
+print(available_qc)
+
+
+###############################################################################
+# 13. GENES-DETECTED SUMMARY
+###############################################################################
+
+if ("Genes_Detected" %in% available_qc) {
+  
+  cd8_genes_detected_summary <- cd8_obj@meta.data %>%
+    
+    dplyr::summarise(
+      
+      Cells = dplyr::n(),
+      
+      Median_Genes_Detected =
+        median(
+          Genes_Detected,
+          na.rm = TRUE
+        ),
+      
+      Mean_Genes_Detected =
+        mean(
+          Genes_Detected,
+          na.rm = TRUE
+        ),
+      
+      Min_Genes_Detected =
+        min(
+          Genes_Detected,
+          na.rm = TRUE
+        ),
+      
+      Max_Genes_Detected =
+        max(
+          Genes_Detected,
+          na.rm = TRUE
+        )
+    )
+  
+  write.csv(
+    cd8_genes_detected_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_Genes_Detected_summary.csv"
+    ),
+    row.names = FALSE
   )
 }
 
 
-# ------------------------------------------------------------
-# 5.2 Extract normalized CD8 expression
-# ------------------------------------------------------------
+###############################################################################
+# 14. MITOCHONDRIAL SUMMARY
+###############################################################################
 
-cd8_data <- SeuratObject::LayerData(
+if ("Mito_Detection_Fraction" %in% available_qc) {
+  
+  cd8_mito_summary <- cd8_obj@meta.data %>%
+    
+    dplyr::summarise(
+      
+      Cells = dplyr::n(),
+      
+      Median_Mito_Detection_Fraction =
+        median(
+          Mito_Detection_Fraction,
+          na.rm = TRUE
+        ),
+      
+      Mean_Mito_Detection_Fraction =
+        mean(
+          Mito_Detection_Fraction,
+          na.rm = TRUE
+        ),
+      
+      Max_Mito_Detection_Fraction =
+        max(
+          Mito_Detection_Fraction,
+          na.rm = TRUE
+        )
+    )
+  
+  write.csv(
+    cd8_mito_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_mito_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+###############################################################################
+# 15. RIBOSOMAL METADATA SUMMARY
+###############################################################################
+
+if ("Ribo_Detection_Fraction" %in% available_qc) {
+  
+  cd8_ribo_summary <- cd8_obj@meta.data %>%
+    
+    dplyr::summarise(
+      
+      Cells = dplyr::n(),
+      
+      Median_Ribo_Detection_Fraction =
+        median(
+          Ribo_Detection_Fraction,
+          na.rm = TRUE
+        ),
+      
+      Mean_Ribo_Detection_Fraction =
+        mean(
+          Ribo_Detection_Fraction,
+          na.rm = TRUE
+        ),
+      
+      Max_Ribo_Detection_Fraction =
+        max(
+          Ribo_Detection_Fraction,
+          na.rm = TRUE
+        )
+    )
+  
+  write.csv(
+    cd8_ribo_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_ribo_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+###############################################################################
+# 16. TOTAL LOGCP10K SUMMARY
+###############################################################################
+
+if ("Total_LogCP10K" %in% available_qc) {
+  
+  cd8_expression_sum_summary <- cd8_obj@meta.data %>%
+    
+    dplyr::summarise(
+      
+      Cells = dplyr::n(),
+      
+      Median_Total_LogCP10K =
+        median(
+          Total_LogCP10K,
+          na.rm = TRUE
+        ),
+      
+      Mean_Total_LogCP10K =
+        mean(
+          Total_LogCP10K,
+          na.rm = TRUE
+        ),
+      
+      Min_Total_LogCP10K =
+        min(
+          Total_LogCP10K,
+          na.rm = TRUE
+        ),
+      
+      Max_Total_LogCP10K =
+        max(
+          Total_LogCP10K,
+          na.rm = TRUE
+        )
+    )
+  
+  write.csv(
+    cd8_expression_sum_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_Total_LogCP10K_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+###############################################################################
+# 17. QC / DOUBLE-CHECK SUMMARIES
+###############################################################################
+
+if ("QC_Pass" %in% colnames(cd8_obj@meta.data)) {
+  
+  qc_pass_summary <- as.data.frame(
+    table(
+      cd8_obj$QC_Pass,
+      useNA = "ifany"
+    )
+  )
+  
+  colnames(qc_pass_summary) <- c(
+    "QC_Pass",
+    "Cells"
+  )
+  
+  write.csv(
+    qc_pass_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_pass_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+if ("QC_LowGenes" %in% colnames(cd8_obj@meta.data)) {
+  
+  low_gene_summary <- as.data.frame(
+    table(
+      cd8_obj$QC_LowGenes,
+      useNA = "ifany"
+    )
+  )
+  
+  colnames(low_gene_summary) <- c(
+    "QC_LowGenes",
+    "Cells"
+  )
+  
+  write.csv(
+    low_gene_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_qc_low_gene_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+if ("Potential_HighComplexity" %in%
+    colnames(cd8_obj@meta.data)) {
+  
+  complexity_summary <- as.data.frame(
+    table(
+      cd8_obj$Potential_HighComplexity,
+      useNA = "ifany"
+    )
+  )
+  
+  colnames(complexity_summary) <- c(
+    "Potential_HighComplexity",
+    "Cells"
+  )
+  
+  write.csv(
+    complexity_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_high_complexity_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+message(
+  "\nNo automatic CD8 cell removal based on Phase 3 QC flags."
+)
+
+
+###############################################################################
+# 18. JOIN EXISTING NORMALIZED DATA LAYERS
+###############################################################################
+#
+# The Phase 3 RNA assay contains sample-specific normalized expression layers.
+#
+# These are already processed log-CP10K expression values.
+#
+# We join those existing normalized layers for state discovery.
+#
+# We DO NOT:
+#   - create counts
+#   - reverse-transform expression
+#   - NormalizeData()
+#
+###############################################################################
+
+message(
+  "\nJoining existing normalized expression layers..."
+)
+
+cd8_obj[["RNA"]] <- JoinLayers(
+  cd8_obj[["RNA"]]
+)
+
+joined_layers <- Layers(
+  cd8_obj[["RNA"]]
+)
+
+message(
+  "\nRNA layers after joining:"
+)
+
+print(joined_layers)
+
+if (!("data" %in% joined_layers)) {
+  
+  stop(
+    "Joined RNA assay does not contain a 'data' layer."
+  )
+}
+
+joined_data <- LayerData(
   cd8_obj,
   assay = "RNA",
   layer = "data"
 )
 
-
-# ------------------------------------------------------------
-# 5.3 Validate dimensions
-# ------------------------------------------------------------
-
 if (
-  nrow(cd8_data) != nrow(cd8_obj) ||
-  ncol(cd8_data) != ncol(cd8_obj)
+  nrow(joined_data) != expected_total_features ||
+  ncol(joined_data) != expected_cd8_n
 ) {
+  
   stop(
-    "Normalized CD8 expression dimensions do not match ",
-    "the CD8 object."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 5.4 Validate feature and cell order
-# ------------------------------------------------------------
-
-if (!identical(
-  rownames(cd8_data),
-  rownames(cd8_obj)
-)) {
-  stop(
-    "Normalized expression feature order does not match ",
-    "the CD8 object."
+    "Joined data layer has unexpected dimensions.\n",
+    "Expected: ",
+    expected_total_features,
+    " x ",
+    expected_cd8_n,
+    "\nFound: ",
+    nrow(joined_data),
+    " x ",
+    ncol(joined_data)
   )
 }
 
 if (!identical(
-  colnames(cd8_data),
+  colnames(joined_data),
   colnames(cd8_obj)
 )) {
+  
   stop(
-    "Normalized expression cell order does not match ",
-    "the CD8 object."
+    "Joined data-layer cell names do not match the Seurat object."
   )
 }
 
 
-# ------------------------------------------------------------
-# 5.5 Validate finite expression values
-# ------------------------------------------------------------
+###############################################################################
+# 19. CD8-SPECIFIC VARIABLE FEATURES
+###############################################################################
 
-if (any(!is.finite(cd8_data@x))) {
-  stop(
-    "Non-finite values detected in normalized CD8 expression."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 5.6 Record expression provenance
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_Normalization <- list(
-  expression_assay = "RNA",
-  expression_layer = "data",
-  normalization_status =
-    "Existing normalized expression retained",
-  raw_count_re_normalization =
-    "Not performed because raw integer count matrix is not available in the Phase 2/3 checkpoints",
-  rationale =
-    "Avoid applying normalization to an already transformed expression representation"
-)
-
-
-# ------------------------------------------------------------
-# 5.7 Section 5 checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("CD8 EXPRESSION REPRESENTATION CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("Genes: ", nrow(cd8_obj))
-message("")
-message("RNA layers:")
-print(cd8_rna_layers)
-message("")
-message("Analysis assay: RNA")
-message("Analysis layer: data")
-message("Expression dimensions: ", nrow(cd8_data), " x ", ncol(cd8_data))
-message("Raw-count re-normalization: NOT performed")
-message("Existing normalized expression retained: YES")
-message("============================================================")
-
-# ============================================================
-# 6. CD8-SPECIFIC VARIABLE-FEATURE SELECTION
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 6.1 Define CD8 variable-feature parameters
-# ------------------------------------------------------------
-
-cd8_nfeatures <- 2000
-cd8_hvg_method <- "vst"
-
-
-# ------------------------------------------------------------
-# 6.2 Confirm normalized expression is available
-# ------------------------------------------------------------
-
-cd8_rna_layers <- SeuratObject::Layers(
-  cd8_obj[["RNA"]]
-)
-
-if (!("data" %in% cd8_rna_layers)) {
-  stop(
-    "Normalized RNA data layer is required for CD8 HVG selection."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 6.3 Identify variable features
-# ------------------------------------------------------------
-
-message("")
-message("Running CD8-specific variable-feature selection...")
 message(
-  "Method: ",
-  cd8_hvg_method
-)
-message(
-  "Target features: ",
-  cd8_nfeatures
+  "\nSelecting CD8-specific variable features..."
 )
 
-cd8_obj <- Seurat::FindVariableFeatures(
-  object = cd8_obj,
+cd8_obj <- FindVariableFeatures(
+  cd8_obj,
   assay = "RNA",
-  selection.method = cd8_hvg_method,
-  nfeatures = cd8_nfeatures,
+  layer = "data",
+  selection.method = "vst",
+  nfeatures = 2000,
   verbose = TRUE
 )
 
-
-# ------------------------------------------------------------
-# 6.4 Retrieve selected features
-# ------------------------------------------------------------
-
-cd8_hvgs <- Seurat::VariableFeatures(
-  cd8_obj,
-  assay = "RNA"
+cd8_hvgs <- VariableFeatures(
+  cd8_obj
 )
 
-
-# ------------------------------------------------------------
-# 6.5 Validate HVG selection
-# ------------------------------------------------------------
-
-if (length(cd8_hvgs) != cd8_nfeatures) {
+if (length(cd8_hvgs) == 0) {
+  
   stop(
-    "Expected ",
-    cd8_nfeatures,
-    " CD8 variable features but found ",
-    length(cd8_hvgs),
-    "."
+    "No variable features were identified."
   )
 }
-
-if (anyDuplicated(cd8_hvgs) > 0) {
-  stop("Duplicated CD8 variable features detected.")
-}
-
-if (!all(cd8_hvgs %in% rownames(cd8_obj))) {
-  stop(
-    "One or more CD8 variable features are absent from the object."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 6.6 Check for missing feature names
-# ------------------------------------------------------------
-
-if (any(is.na(cd8_hvgs)) || any(cd8_hvgs == "")) {
-  stop("Missing or empty CD8 variable-feature names detected.")
-}
-
-
-# ------------------------------------------------------------
-# 6.7 Record HVG provenance
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_HVG <- list(
-  method = cd8_hvg_method,
-  nfeatures = cd8_nfeatures,
-  assay = "RNA",
-  layer = "data"
-)
-
-
-# ------------------------------------------------------------
-# 6.8 Save CD8 marker-independent HVG table
-# ------------------------------------------------------------
-
-cd8_hvg_table <- data.frame(
-  Rank = seq_along(cd8_hvgs),
-  Gene = cd8_hvgs,
-  stringsAsFactors = FALSE
-)
 
 write.csv(
-  cd8_hvg_table,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_variable_features.csv"
+  data.frame(
+    Rank = seq_along(cd8_hvgs),
+    Gene = cd8_hvgs
+  ),
+  file.path(
+    table_dir,
+    "phase4_cd8_hvg_list.csv"
   ),
   row.names = FALSE
 )
 
-
-# ------------------------------------------------------------
-# 6.9 Section 6 checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("CD8 VARIABLE-FEATURE CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("HVG method: ", cd8_hvg_method)
-message("Requested HVGs: ", cd8_nfeatures)
-message("Selected HVGs: ", length(cd8_hvgs))
-message("")
-message("Top 30 CD8 variable features:")
-print(head(cd8_hvgs, 30))
-message("============================================================")
-
-# ============================================================
-# 7. CHARACTERIZE CD8 VARIABLE-FEATURE COMPOSITION
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 7.1 Retrieve CD8 HVGs
-# ------------------------------------------------------------
-
-cd8_hvgs <- Seurat::VariableFeatures(
-  cd8_obj,
-  assay = "RNA"
-)
-
-if (length(cd8_hvgs) != 2000) {
-  stop(
-    "Expected 2,000 CD8 HVGs; found ",
-    length(cd8_hvgs),
-    "."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 7.2 Define broad feature categories
-# ------------------------------------------------------------
-
-cd8_hvg_categories <- tibble::tibble(
-  Gene = cd8_hvgs
-) |>
-  dplyr::mutate(
-    Category = dplyr::case_when(
-      
-      grepl(
-        "^MT-",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "Mitochondrial",
-      
-      grepl(
-        "^RPS|^RPL",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "Ribosomal",
-      
-      grepl(
-        "^TRAV|^TRBV|^TRGV|^TRDV|^TRAJ|^TRBJ|^TRDJ|^TRGJ",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "TCR",
-      
-      grepl(
-        "^IGH|^IGK|^IGL",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "Immunoglobulin",
-      
-      grepl(
-        "MKI67|TOP2A|TYMS|PCNA|STMN1|TUBA1B",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "Cell_Cycle",
-      
-      grepl(
-        "HSPA1A|HSPA1B|FOS|JUN|JUNB|DUSP1|DUSP2|IER2|EGR1|EGR2",
-        Gene,
-        ignore.case = TRUE
-      ) ~ "Stress_Immediate_Early",
-      
-      TRUE ~ "Other"
-    )
-  )
-
-
-# ------------------------------------------------------------
-# 7.3 Summarize category composition
-# ------------------------------------------------------------
-
-cd8_hvg_category_summary <- cd8_hvg_categories |>
-  dplyr::count(
-    Category,
-    name = "HVG_Count"
-  ) |>
-  dplyr::mutate(
-    Percentage = 100 * HVG_Count / length(cd8_hvgs)
-  ) |>
-  dplyr::arrange(
-    dplyr::desc(HVG_Count)
-  )
-
-
-# ------------------------------------------------------------
-# 7.4 Display category summary
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("CD8 HVG COMPOSITION")
-message("============================================================")
-
-print(cd8_hvg_category_summary)
-
-
-# ------------------------------------------------------------
-# 7.5 Display top HVGs by category
-# ------------------------------------------------------------
-
-message("")
-message("Top TCR HVGs:")
-print(
-  cd8_hvg_categories |>
-    dplyr::filter(Category == "TCR") |>
-    dplyr::slice_head(n = 30)
-)
-
-message("")
-message("Top stress/immediate-early HVGs:")
-print(
-  cd8_hvg_categories |>
-    dplyr::filter(Category == "Stress_Immediate_Early") |>
-    dplyr::slice_head(n = 30)
+message(
+  "CD8 HVGs identified: ",
+  length(cd8_hvgs)
 )
 
 
-# ------------------------------------------------------------
-# 7.6 Save HVG composition table
-# ------------------------------------------------------------
+###############################################################################
+# 20. VARIABLE FEATURE PLOT — PNG
+###############################################################################
 
-write.csv(
-  cd8_hvg_categories,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_hvg_categories.csv"
+p_hvg <- VariableFeaturePlot(
+  cd8_obj
+) +
+  ggtitle(
+    "CD8 variable features"
+  )
+
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_variable_features.png"
   ),
-  row.names = FALSE
-)
-
-write.csv(
-  cd8_hvg_category_summary,
-  file = here(
-    "results",
-    "tables",
-    "phase4_cd8_hvg_category_summary.csv"
-  ),
-  row.names = FALSE
+  p_hvg,
+  width = 8,
+  height = 6,
+  dpi = 300
 )
 
 
-# ------------------------------------------------------------
-# 7.7 Checkpoint
-# ------------------------------------------------------------
+###############################################################################
+# 21. SCALE CD8 HVGs
+###############################################################################
 
-message("")
-message("============================================================")
-message("CD8 HVG COMPOSITION CHECKPOINT")
-message("============================================================")
-message("Total HVGs: ", length(cd8_hvgs))
-message("")
-print(cd8_hvg_category_summary)
-message("============================================================")
+message(
+  "\nScaling CD8 HVGs..."
+)
 
-# ============================================================
-# SECTION 8 — CD8-specific scaling
-# ============================================================
-
-message("============================================================")
-message("SECTION 8 — CD8-specific scaling")
-message("============================================================")
-
-# ------------------------------------------------------------
-# 8.1 Retrieve locked CD8 HVGs
-# ------------------------------------------------------------
-
-cd8_hvgs <- Seurat::VariableFeatures(
+cd8_obj <- ScaleData(
   cd8_obj,
-  assay = "RNA"
-)
-
-if (length(cd8_hvgs) != 2000) {
-  stop(
-    "Expected exactly 2,000 locked CD8 HVGs; found ",
-    length(cd8_hvgs), "."
-  )
-}
-
-if (anyDuplicated(cd8_hvgs) > 0) {
-  stop("Locked CD8 HVG list contains duplicated features.")
-}
-
-message("Locked CD8 HVGs: ", length(cd8_hvgs))
-
-
-# ------------------------------------------------------------
-# 8.2 Scale the locked CD8 HVGs
-# ------------------------------------------------------------
-
-cd8_obj <- Seurat::ScaleData(
-  object = cd8_obj,
   assay = "RNA",
   features = cd8_hvgs,
   verbose = TRUE
 )
 
 
-# ------------------------------------------------------------
-# 8.3 Confirm scale.data exists
-# ------------------------------------------------------------
+###############################################################################
+# 22. PCA
+###############################################################################
 
-rna_layers_after_scaling <- SeuratObject::Layers(
-  cd8_obj[["RNA"]]
+message(
+  "\nRunning PCA..."
 )
 
-message("RNA layers after scaling:")
-print(rna_layers_after_scaling)
-
-if (!"scale.data" %in% rna_layers_after_scaling) {
-  stop("RNA scale.data layer was not created.")
-}
-
-
-# ------------------------------------------------------------
-# 8.4 Retrieve scaled expression
-# ------------------------------------------------------------
-
-cd8_scaled_data <- SeuratObject::LayerData(
+cd8_obj <- RunPCA(
   cd8_obj,
-  assay = "RNA",
-  layer = "scale.data"
-)
-
-message(
-  "Retrieved scale.data dimensions: ",
-  nrow(cd8_scaled_data),
-  " × ",
-  ncol(cd8_scaled_data)
-)
-
-
-# ------------------------------------------------------------
-# 8.5 Confirm all locked HVGs are present
-# ------------------------------------------------------------
-
-missing_hvgs <- setdiff(
-  cd8_hvgs,
-  rownames(cd8_scaled_data)
-)
-
-if (length(missing_hvgs) > 0) {
-  stop(
-    "Some locked CD8 HVGs are missing from scale.data: ",
-    paste(head(missing_hvgs, 20), collapse = ", ")
-  )
-}
-
-
-# ------------------------------------------------------------
-# 8.6 Explicitly restore the locked HVG order
-# ------------------------------------------------------------
-
-cd8_scaled_data <- cd8_scaled_data[
-  cd8_hvgs,
-  ,
-  drop = FALSE
-]
-
-if (!identical(
-  rownames(cd8_scaled_data),
-  cd8_hvgs
-)) {
-  stop(
-    "Failed to restore the locked CD8 HVG order."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 8.7 Validate cell order
-# ------------------------------------------------------------
-
-if (!identical(
-  colnames(cd8_scaled_data),
-  colnames(cd8_obj)
-)) {
-  stop(
-    "Scaled expression cell order does not match CD8 object."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 8.8 Validate dimensions and finite values
-# ------------------------------------------------------------
-
-if (!all(
-  dim(cd8_scaled_data) ==
-  c(length(cd8_hvgs), ncol(cd8_obj))
-)) {
-  stop(
-    "Scaled expression dimensions are incorrect."
-  )
-}
-
-if (any(!is.finite(cd8_scaled_data))) {
-  stop(
-    "Scaled expression contains non-finite values."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 8.9 Scaling diagnostics
-# ------------------------------------------------------------
-
-scaled_row_means <- Matrix::rowMeans(cd8_scaled_data)
-
-scaled_row_variances <- apply(
-  cd8_scaled_data,
-  1,
-  var
-)
-
-scaling_summary <- data.frame(
-  feature = cd8_hvgs,
-  mean = scaled_row_means,
-  variance = scaled_row_variances
-)
-
-message("")
-message("Scaling diagnostics:")
-message(
-  "Maximum absolute row mean: ",
-  signif(max(abs(scaled_row_means)), 6)
-)
-
-message(
-  "Median row variance: ",
-  signif(median(scaled_row_variances), 6)
-)
-
-message(
-  "Variance range: ",
-  signif(min(scaled_row_variances), 6),
-  " – ",
-  signif(max(scaled_row_variances), 6)
-)
-
-
-# ------------------------------------------------------------
-# 8.10 Save scaling summary
-# ------------------------------------------------------------
-
-# ------------------------------------------------------------
-# Restore output directories
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
-  )
-}
-
-# Save scaling summary
-write.csv(
-  scaling_summary,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_scaling_summary.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  scaling_summary,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_scaling_summary.csv"
-  ),
-  row.names = FALSE
-)
-
-print(
-  file.exists(
-    file.path(
-      tables_dir,
-      "phase4_cd8_scaling_summary.csv"
-    )
-  )
-)
-
-
-# ------------------------------------------------------------
-# 8.11 Checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 8 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("Scaled features: ", nrow(cd8_scaled_data))
-message("Expected features: 2000")
-message("Feature order locked: YES")
-message("Cell order preserved: YES")
-message("Finite values: YES")
-message("Scaling summary saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 9 — CD8 PCA
-# ============================================================
-
-message("============================================================")
-message("SECTION 9 — CD8 PCA")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 9.1 Retrieve and validate locked CD8 HVGs
-# ------------------------------------------------------------
-
-cd8_hvgs <- Seurat::VariableFeatures(
-  cd8_obj,
-  assay = "RNA"
-)
-
-if (length(cd8_hvgs) != 2000) {
-  stop(
-    "Expected exactly 2,000 locked CD8 HVGs; found ",
-    length(cd8_hvgs), "."
-  )
-}
-
-if (anyDuplicated(cd8_hvgs) > 0) {
-  stop(
-    "Locked CD8 HVG list contains duplicated features."
-  )
-}
-
-message("Locked CD8 HVGs: ", length(cd8_hvgs))
-
-
-# ------------------------------------------------------------
-# 9.2 Confirm scale.data contains all locked HVGs
-# ------------------------------------------------------------
-
-rna_layers <- SeuratObject::Layers(
-  cd8_obj[["RNA"]]
-)
-
-if (!"scale.data" %in% rna_layers) {
-  stop(
-    "RNA scale.data layer is missing."
-  )
-}
-
-cd8_scaled_data <- SeuratObject::LayerData(
-  cd8_obj,
-  assay = "RNA",
-  layer = "scale.data"
-)
-
-missing_hvgs <- setdiff(
-  cd8_hvgs,
-  rownames(cd8_scaled_data)
-)
-
-if (length(missing_hvgs) > 0) {
-  stop(
-    "Locked CD8 HVGs are missing from scale.data."
-  )
-}
-
-if (nrow(cd8_scaled_data) < length(cd8_hvgs)) {
-  stop(
-    "scale.data contains fewer rows than the locked HVG set."
-  )
-}
-
-message(
-  "scale.data contains all ",
-  length(cd8_hvgs),
-  " locked CD8 HVGs."
-)
-
-
-# ------------------------------------------------------------
-# 9.3 Run PCA
-# ------------------------------------------------------------
-
-message("")
-message("Running PCA on the 2,000 locked CD8 HVGs...")
-
-cd8_obj <- Seurat::RunPCA(
-  object = cd8_obj,
   assay = "RNA",
   features = cd8_hvgs,
   npcs = 50,
   verbose = TRUE
 )
 
-
-# ------------------------------------------------------------
-# 9.4 Confirm PCA reduction exists
-# ------------------------------------------------------------
-
-if (!"pca" %in% names(cd8_obj@reductions)) {
+if (!("pca" %in% Reductions(cd8_obj))) {
+  
   stop(
-    "PCA reduction was not created."
+    "PCA reduction was not generated."
   )
 }
 
-pca_embeddings <- SeuratObject::Embeddings(
+
+###############################################################################
+# 23. PCA ELBOW — PNG
+###############################################################################
+
+p_elbow <- ElbowPlot(
   cd8_obj,
-  reduction = "pca"
-)
-
-message("")
-message(
-  "PCA embedding dimensions: ",
-  nrow(pca_embeddings),
-  " × ",
-  ncol(pca_embeddings)
-)
-
-
-# ------------------------------------------------------------
-# 9.5 Validate PCA cell order
-# ------------------------------------------------------------
-
-if (!identical(
-  rownames(pca_embeddings),
-  colnames(cd8_obj)
-)) {
-  stop(
-    "PCA embedding cell order does not match the CD8 object."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 9.6 Validate number of PCs
-# ------------------------------------------------------------
-
-if (ncol(pca_embeddings) != 50) {
-  stop(
-    "Expected 50 PCs; found ",
-    ncol(pca_embeddings), "."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 9.7 Validate finite PCA embeddings
-# ------------------------------------------------------------
-
-if (any(!is.finite(pca_embeddings))) {
-  stop(
-    "PCA embeddings contain non-finite values."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 9.8 Extract PCA variance information
-# ------------------------------------------------------------
-
-pca_stdev <- cd8_obj[["pca"]]@stdev
-
-if (length(pca_stdev) != 50) {
-  stop(
-    "Expected 50 PCA standard deviations; found ",
-    length(pca_stdev), "."
-  )
-}
-
-pca_variance <- pca_stdev^2
-
-pca_variance_summary <- data.frame(
-  PC = seq_along(pca_stdev),
-  Standard_Deviation = pca_stdev,
-  Variance = pca_variance,
-  Percent_Variance = 100 * pca_variance / sum(pca_variance)
-)
-
-message("")
-message("Generating PCA elbow plot...")
-
-elbow_plot <- Seurat::ElbowPlot(
-  object = cd8_obj,
-  reduction = "pca",
   ndims = 50
-)
-
-print(elbow_plot)
-
-
-# ------------------------------------------------------------
-# 9.9 Cumulative variance
-# ------------------------------------------------------------
-
-pca_variance_summary$Cumulative_Percent_Variance <-
-  cumsum(
-    pca_variance_summary$Percent_Variance
+) +
+  ggtitle(
+    "CD8 PCA elbow plot"
   )
 
-
-# ------------------------------------------------------------
-# 9.10 Save PCA variance table
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
-  )
-}
-
-write.csv(
-  pca_variance_summary,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_pca_variance.csv"
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_pca_elbow.png"
   ),
-  row.names = FALSE
+  p_elbow,
+  width = 8,
+  height = 6,
+  dpi = 300
 )
 
 
-# ------------------------------------------------------------
-# 9.11 Print PCA variance diagnostics
-# ------------------------------------------------------------
-
-message("")
-message("First 10 PCs:")
-print(
-  pca_variance_summary[1:10, ]
-)
-
-message("")
-message(
-  "Cumulative variance after PC10: ",
-  round(
-    pca_variance_summary$Cumulative_Percent_Variance[10],
-    2
-  ),
-  "%"
-)
+###############################################################################
+# 24. NEIGHBOR GRAPH
+###############################################################################
+#
+# Primary state-discovery space:
+#   PC1:20
+#
+# No integration or batch correction.
+###############################################################################
 
 message(
-  "Cumulative variance after PC20: ",
-  round(
-    pca_variance_summary$Cumulative_Percent_Variance[20],
-    2
-  ),
-  "%"
+  "\nConstructing CD8 neighbor graph..."
 )
 
-message(
-  "Cumulative variance after PC30: ",
-  round(
-    pca_variance_summary$Cumulative_Percent_Variance[30],
-    2
-  ),
-  "%"
-)
-
-message(
-  "Cumulative variance after PC50: ",
-  round(
-    pca_variance_summary$Cumulative_Percent_Variance[50],
-    2
-  ),
-  "%"
-)
-
-
-# ------------------------------------------------------------
-# 9.12 PCA checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 9 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", nrow(pca_embeddings))
-message("PCA dimensions: ", ncol(pca_embeddings))
-message("Expected PCs: 50")
-message("HVGs used: 2000")
-message("PCA embeddings finite: YES")
-message("PCA cell order preserved: YES")
-message("PCA variance table saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 10 — CD8 nearest-neighbor graph and clustering
-# ============================================================
-
-message("============================================================")
-message("SECTION 10 — CD8 NEIGHBOR GRAPH + CLUSTERING")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 10.1 Lock downstream dimensions
-# ------------------------------------------------------------
-
-cd8_dims <- 1:20
-
-if (length(cd8_dims) != 20) {
-  stop("Expected exactly 20 downstream PCs.")
-}
-
-pca_embeddings <- SeuratObject::Embeddings(
+cd8_obj <- FindNeighbors(
   cd8_obj,
-  reduction = "pca"
-)
-
-if (ncol(pca_embeddings) < max(cd8_dims)) {
-  stop(
-    "CD8 PCA does not contain enough PCs for the locked ",
-    "1:20 dimensionality."
-  )
-}
-
-message("Downstream PCs locked: 1:20")
-
-
-# ------------------------------------------------------------
-# 10.2 Build nearest-neighbor graph
-# ------------------------------------------------------------
-
-message("")
-message("Building CD8 nearest-neighbor graph...")
-
-cd8_obj <- Seurat::FindNeighbors(
-  object = cd8_obj,
+  assay = "RNA",
   reduction = "pca",
-  dims = cd8_dims,
+  dims = 1:20,
   k.param = 20,
-  compute.SNN = TRUE,
+  graph.name = c("CD8_nn", "CD8_snn"),
   verbose = TRUE
 )
 
 
-# ------------------------------------------------------------
-# 10.3 Confirm neighbor graphs
-# ------------------------------------------------------------
-
-graph_names <- names(cd8_obj@graphs)
-
-message("")
-message("Graphs present:")
-print(graph_names)
-
-if (!"RNA_nn" %in% graph_names) {
-  stop("Expected RNA_nn graph was not created.")
-}
-
-if (!"RNA_snn" %in% graph_names) {
-  stop("Expected RNA_snn graph was not created.")
-}
-
-
-# ------------------------------------------------------------
-# 10.4 Validate graph dimensions
-# ------------------------------------------------------------
-
-nn_graph <- cd8_obj[["RNA_nn"]]
-snn_graph <- cd8_obj[["RNA_snn"]]
-
-expected_cells <- ncol(cd8_obj)
-
-if (nrow(nn_graph) != expected_cells ||
-    ncol(nn_graph) != expected_cells) {
-  stop("RNA_nn graph dimensions do not match CD8 cell count.")
-}
-
-if (nrow(snn_graph) != expected_cells ||
-    ncol(snn_graph) != expected_cells) {
-  stop("RNA_snn graph dimensions do not match CD8 cell count.")
-}
+###############################################################################
+# 25. CLUSTERING
+###############################################################################
 
 message(
-  "RNA_nn dimensions: ",
-  nrow(nn_graph),
-  " × ",
-  ncol(nn_graph)
+  "\nClustering CD8 cells..."
 )
 
-message(
-  "RNA_snn dimensions: ",
-  nrow(snn_graph),
-  " × ",
-  ncol(snn_graph)
-)
-
-
-# ------------------------------------------------------------
-# 10.5 Cluster CD8 cells
-# ------------------------------------------------------------
-
-cd8_resolution <- 0.4
-
-message("")
-message(
-  "Clustering CD8 cells at resolution ",
-  cd8_resolution,
-  "..."
-)
-
-cd8_obj <- Seurat::FindClusters(
-  object = cd8_obj,
-  graph.name = "RNA_snn",
-  resolution = cd8_resolution,
+cd8_obj <- FindClusters(
+  cd8_obj,
+  graph.name = "CD8_snn",
+  resolution = 0.4,
   algorithm = 1,
-  random.seed = 12345,
+  random.seed = 20260916,
   verbose = TRUE
 )
 
-
-# ------------------------------------------------------------
-# 10.6 Confirm cluster identities
-# ------------------------------------------------------------
-
-if (!"seurat_clusters" %in% colnames(cd8_obj@meta.data)) {
-  stop(
-    "seurat_clusters was not created."
-  )
-}
-
-cd8_clusters <- cd8_obj$seurat_clusters
-
-if (any(is.na(cd8_clusters))) {
-  stop(
-    "CD8 clustering produced missing cluster assignments."
-  )
-}
-
-cluster_counts <- table(cd8_clusters)
-
-message("")
-message("CD8 cluster counts:")
-print(cluster_counts)
-
-message("")
-message(
-  "Number of CD8 clusters: ",
-  length(cluster_counts)
-)
-
-
-# ------------------------------------------------------------
-# 10.7 Confirm every CD8 cell has exactly one cluster
-# ------------------------------------------------------------
-
-if (length(cd8_clusters) != ncol(cd8_obj)) {
-  stop(
-    "Number of cluster assignments does not match CD8 cell count."
-  )
-}
-
-if (sum(cluster_counts) != ncol(cd8_obj)) {
-  stop(
-    "Cluster counts do not sum to total CD8 cell count."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 10.8 Cluster size summary
-# ------------------------------------------------------------
-
-cluster_summary <- data.frame(
-  cluster = names(cluster_counts),
-  n_cells = as.integer(cluster_counts),
-  fraction = as.integer(cluster_counts) / ncol(cd8_obj)
-)
-
-cluster_summary <- cluster_summary[
-  order(
-    as.numeric(as.character(cluster_summary$cluster))
+cluster_vector <- setNames(
+  as.character(
+    Idents(cd8_obj)
   ),
-  ,
-  drop = FALSE
-]
-
-message("")
-message("Cluster size summary:")
-print(cluster_summary)
-
-
-# ------------------------------------------------------------
-# 10.9 Save cluster table
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
+  names(
+    Idents(cd8_obj)
+  )
 )
 
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
+cd8_obj <- AddMetaData(
+  cd8_obj,
+  metadata = cluster_vector,
+  col.name = "CD8_Cluster"
+)
+
+cluster_sizes <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::arrange(
+    suppressWarnings(
+      as.numeric(CD8_Cluster)
+    )
   )
-}
 
 write.csv(
-  cluster_summary,
-  file = file.path(
-    tables_dir,
+  cluster_sizes,
+  file.path(
+    table_dir,
     "phase4_cd8_cluster_sizes.csv"
   ),
   row.names = FALSE
 )
 
-
-# ------------------------------------------------------------
-# 10.10 Record locked clustering parameters
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_Clustering <- list(
-  reduction = "pca",
-  dimensions = "1:20",
-  k_param = 20,
-  graph = "RNA_snn",
-  resolution = cd8_resolution,
-  algorithm = 1,
-  random_seed = 12345
+message(
+  "\nCD8 cluster sizes:"
 )
 
+print(cluster_sizes)
 
-# ------------------------------------------------------------
-# 10.11 Save Section 10 checkpoint
-# ------------------------------------------------------------
 
-checkpoint_dir <- here::here(
-  "results",
-  "rds_objects"
+###############################################################################
+# 26. UMAP
+###############################################################################
+
+message(
+  "\nRunning UMAP..."
 )
 
-if (!dir.exists(checkpoint_dir)) {
-  dir.create(
-    checkpoint_dir,
-    recursive = TRUE
-  )
-}
-
-saveRDS(
+cd8_obj <- RunUMAP(
   cd8_obj,
-  file = file.path(
-    checkpoint_dir,
-    "phase4_cd8_neighbors_clustering.rds"
-  )
-)
-
-
-# ------------------------------------------------------------
-# 10.12 SECTION 10 CHECKPOINT
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 10 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("Downstream PCs: 1:20")
-message("k.param: 20")
-message("SNN graph: RNA_snn")
-message("Clustering resolution: ", cd8_resolution)
-message("Clustering algorithm: 1")
-message("Number of clusters: ", length(cluster_counts))
-message("Missing cluster assignments: ", sum(is.na(cd8_clusters)))
-message("Cluster table saved.")
-message("Checkpoint object saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 11 — CD8 UMAP
-# ============================================================
-
-message("============================================================")
-message("SECTION 11 — CD8 UMAP")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 11.1 Confirm locked dimensionality
-# ------------------------------------------------------------
-
-cd8_dims <- 1:20
-
-pca_embeddings <- SeuratObject::Embeddings(
-  cd8_obj,
-  reduction = "pca"
-)
-
-if (ncol(pca_embeddings) < max(cd8_dims)) {
-  stop("Required PCs 1:20 are not available.")
-}
-
-
-# ------------------------------------------------------------
-# 11.2 Run UMAP
-# ------------------------------------------------------------
-
-message("Running CD8 UMAP using PCs 1:20...")
-
-cd8_obj <- Seurat::RunUMAP(
-  object = cd8_obj,
   reduction = "pca",
-  dims = cd8_dims,
-  reduction.name = "umap",
-  reduction.key = "UMAP_",
-  seed.use = 12345,
+  dims = 1:20,
+  n.neighbors = 30,
+  min.dist = 0.3,
+  seed.use = 20260916,
+  reduction.name = "umap_cd8",
+  reduction.key = "CD8UMAP_",
   verbose = TRUE
 )
 
 
-# ------------------------------------------------------------
-# 11.3 Validate UMAP
-# ------------------------------------------------------------
+###############################################################################
+# 27. UMAP — CLUSTERS — PNG
+###############################################################################
 
-if (!"umap" %in% names(cd8_obj@reductions)) {
-  stop("UMAP reduction was not created.")
-}
-
-umap_embeddings <- SeuratObject::Embeddings(
+p_cluster <- DimPlot(
   cd8_obj,
-  reduction = "umap"
-)
-
-message(
-  "UMAP dimensions: ",
-  nrow(umap_embeddings),
-  " × ",
-  ncol(umap_embeddings)
-)
-
-if (nrow(umap_embeddings) != ncol(cd8_obj)) {
-  stop("UMAP cell count does not match CD8 object.")
-}
-
-if (ncol(umap_embeddings) != 2) {
-  stop("Expected a 2-dimensional UMAP.")
-}
-
-if (!identical(
-  rownames(umap_embeddings),
-  colnames(cd8_obj)
-)) {
-  stop("UMAP cell order does not match CD8 object.")
-}
-
-if (any(!is.finite(umap_embeddings))) {
-  stop("UMAP contains non-finite values.")
-}
-
-
-# ------------------------------------------------------------
-# 11.4 UMAP — CD8 clusters
-# ------------------------------------------------------------
-
-message("")
-message("Generating CD8 cluster UMAP...")
-
-p_umap_clusters <- Seurat::DimPlot(
-  object = cd8_obj,
-  reduction = "umap",
-  group.by = "seurat_clusters",
+  reduction = "umap_cd8",
+  group.by = "CD8_Cluster",
   label = TRUE,
-  repel = TRUE,
-  raster = TRUE
+  repel = TRUE
 ) +
-  ggplot2::ggtitle(
-    "CD8 T-cell subclusters"
-  ) +
-  ggplot2::theme_classic()
-
-
-# ------------------------------------------------------------
-# 11.5 Save cluster UMAP
-# ------------------------------------------------------------
-
-figures_dir <- here::here(
-  "results",
-  "figures"
-)
-
-if (!dir.exists(figures_dir)) {
-  dir.create(
-    figures_dir,
-    recursive = TRUE
+  ggtitle(
+    "CD8 T-cell transcriptional clusters"
   )
-}
 
-ggplot2::ggsave(
-  filename = file.path(
-    figures_dir,
+ggsave(
+  file.path(
+    figure_dir,
     "phase4_cd8_umap_clusters.png"
   ),
-  plot = p_umap_clusters,
-  width = 9,
+  p_cluster,
+  width = 8,
   height = 7,
   dpi = 300
 )
 
 
-# ------------------------------------------------------------
-# 11.6 UMAP — clinical phase
-# ------------------------------------------------------------
+###############################################################################
+# 28. UMAP — CLINICAL STATES — PNG
+###############################################################################
 
-message("Generating CD8 clinical-state UMAP...")
-
-p_umap_phase <- Seurat::DimPlot(
-  object = cd8_obj,
-  reduction = "umap",
-  group.by = "Phase",
-  raster = TRUE
-) +
-  ggplot2::ggtitle(
-    "CD8 T cells by clinical state"
-  ) +
-  ggplot2::theme_classic()
-
-
-# ------------------------------------------------------------
-# 11.7 Save clinical-state UMAP
-# ------------------------------------------------------------
-
-ggplot2::ggsave(
-  filename = file.path(
-    figures_dir,
-    "phase4_cd8_umap_clinical_phase.png"
-  ),
-  plot = p_umap_phase,
-  width = 9,
-  height = 7,
-  dpi = 300
-)
-
-
-# ------------------------------------------------------------
-# 11.8 Print plots
-# ------------------------------------------------------------
-
-print(p_umap_clusters)
-print(p_umap_phase)
-
-
-# ------------------------------------------------------------
-# 11.9 Record UMAP parameters
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_UMAP <- list(
-  reduction = "pca",
-  dimensions = "1:20",
-  seed = 12345
-)
-
-
-# ------------------------------------------------------------
-# 11.10 Save checkpoint
-# ------------------------------------------------------------
-
-checkpoint_dir <- here::here(
-  "results",
-  "rds_objects"
-)
-
-if (!dir.exists(checkpoint_dir)) {
-  dir.create(
-    checkpoint_dir,
-    recursive = TRUE
-  )
-}
-
-saveRDS(
+p_phase <- DimPlot(
   cd8_obj,
-  file = file.path(
-    checkpoint_dir,
-    "phase4_cd8_umap.rds"
+  reduction = "umap_cd8",
+  group.by = "Phase"
+) +
+  ggtitle(
+    "CD8 cells by GEO-defined clinical state"
   )
+
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_umap_phase.png"
+  ),
+  p_phase,
+  width = 8,
+  height = 7,
+  dpi = 300
 )
 
 
-# ------------------------------------------------------------
-# 11.11 SECTION 11 CHECKPOINT
-# ------------------------------------------------------------
+###############################################################################
+# 29. UMAP — DONORS — PNG
+###############################################################################
 
-message("")
-message("============================================================")
-message("SECTION 11 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("UMAP dimensions: ", ncol(umap_embeddings))
-message("Downstream PCs: 1:20")
-message("Clusters visualized: ", length(unique(cd8_obj$seurat_clusters)))
-message("UMAP embeddings finite: YES")
-message("Cluster UMAP saved.")
-message("Clinical-state UMAP saved.")
-message("Checkpoint object saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 12 — CD8 CLUSTER MARKERS
-# ============================================================
-
-message("============================================================")
-message("SECTION 12 — CD8 CLUSTER MARKERS")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 12.1 Confirm CD8 clustering is available
-# ------------------------------------------------------------
-
-if (!"seurat_clusters" %in% colnames(cd8_obj@meta.data)) {
-  stop(
-    "seurat_clusters is not present in the CD8 object."
+p_donor <- DimPlot(
+  cd8_obj,
+  reduction = "umap_cd8",
+  group.by = "Donor"
+) +
+  ggtitle(
+    "CD8 cells by donor"
   )
-}
 
-cd8_clusters <- cd8_obj$seurat_clusters
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_umap_donor.png"
+  ),
+  p_donor,
+  width = 11,
+  height = 8,
+  dpi = 300
+)
 
-if (any(is.na(cd8_clusters))) {
-  stop(
-    "Missing CD8 cluster assignments."
+
+###############################################################################
+# 30. CLUSTER × DONOR REPRESENTATION
+###############################################################################
+
+cluster_donor_counts <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    Donor,
+    Phase,
+    name = "Cells"
   )
-}
+
+write.csv(
+  cluster_donor_counts,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_donor_counts.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 31. CLUSTER REPRESENTATION DIAGNOSTICS
+###############################################################################
+
+cluster_representation <- cluster_donor_counts %>%
+  
+  dplyr::group_by(
+    CD8_Cluster
+  ) %>%
+  
+  dplyr::summarise(
+    
+    Cluster_Cells =
+      sum(Cells),
+    
+    Donors_Represented =
+      dplyr::n_distinct(Donor),
+    
+    Clinical_States_Represented =
+      dplyr::n_distinct(Phase),
+    
+    Largest_Donor_Count =
+      max(Cells),
+    
+    Largest_Donor_Fraction =
+      max(Cells) / sum(Cells),
+    
+    .groups = "drop"
+  ) %>%
+  
+  dplyr::arrange(
+    suppressWarnings(
+      as.numeric(CD8_Cluster)
+    )
+  )
+
+write.csv(
+  cluster_representation,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_representation_diagnostics.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 32. CLUSTER × CLINICAL-STATE COUNTS
+###############################################################################
+
+cluster_phase_counts <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    Phase,
+    name = "Cells"
+  )
+
+write.csv(
+  cluster_phase_counts,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_phase_counts.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 33. CLUSTER × CLINICAL-STATE PROPORTIONS
+###############################################################################
+
+cluster_phase_proportions <- cluster_phase_counts %>%
+  
+  dplyr::group_by(
+    Phase
+  ) %>%
+  
+  dplyr::mutate(
+    Proportion_Within_CD8 =
+      Cells / sum(Cells)
+  ) %>%
+  
+  dplyr::ungroup()
+
+write.csv(
+  cluster_phase_proportions,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_phase_proportions.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 34. EXPLORATORY CLUSTER MARKERS
+###############################################################################
+#
+# These characterize transcriptional differences among CD8 clusters.
+#
+# They are NOT:
+#   - donor-level differential expression
+#   - clinical-state inference
+#   - Phase 6 analysis
+###############################################################################
 
 message(
-  "CD8 cells: ",
-  ncol(cd8_obj)
+  "\nFinding exploratory cluster markers..."
 )
 
-message(
-  "CD8 clusters: ",
-  length(unique(cd8_clusters))
-)
+Idents(cd8_obj) <- "CD8_Cluster"
 
-
-# ------------------------------------------------------------
-# 12.2 Confirm RNA assay and expression layer
-# ------------------------------------------------------------
-
-rna_layers <- SeuratObject::Layers(
-  cd8_obj[["RNA"]]
-)
-
-message("")
-message("RNA layers:")
-print(rna_layers)
-
-if (!"data" %in% rna_layers) {
-  stop(
-    "RNA data layer is missing."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 12.3 Identify positive cluster markers
-# ------------------------------------------------------------
-
-message("")
-message("Finding positive markers for all CD8 clusters...")
-message("Test: Wilcoxon rank-sum")
-message("min.pct: 0.25")
-message("logfc.threshold: 0.25")
-
-cd8_markers <- Seurat::FindAllMarkers(
-  object = cd8_obj,
+cd8_markers <- FindAllMarkers(
+  cd8_obj,
   assay = "RNA",
   only.pos = TRUE,
-  min.pct = 0.25,
+  min.pct = 0.20,
   logfc.threshold = 0.25,
   test.use = "wilcox",
   verbose = TRUE
 )
 
-
-# ------------------------------------------------------------
-# 12.4 Validate marker table
-# ------------------------------------------------------------
-
-if (!is.data.frame(cd8_markers)) {
-  stop(
-    "CD8 marker result is not a data.frame."
-  )
-}
-
 if (nrow(cd8_markers) == 0) {
+  
   stop(
-    "No CD8 cluster markers were identified."
-  )
-}
-
-required_marker_columns <- c(
-  "cluster",
-  "gene",
-  "p_val",
-  "p_val_adj",
-  "avg_log2FC",
-  "pct.1",
-  "pct.2"
-)
-
-missing_marker_columns <- setdiff(
-  required_marker_columns,
-  colnames(cd8_markers)
-)
-
-if (length(missing_marker_columns) > 0) {
-  stop(
-    "Marker table is missing required columns: ",
-    paste(
-      missing_marker_columns,
-      collapse = ", "
-    )
-  )
-}
-
-
-# ------------------------------------------------------------
-# 12.5 Restrict to significant markers for interpretation
-# ------------------------------------------------------------
-
-cd8_markers_sig <- cd8_markers[
-  !is.na(cd8_markers$p_val_adj) &
-    cd8_markers$p_val_adj < 0.05,
-  ,
-  drop = FALSE
-]
-
-message("")
-message(
-  "Total positive marker rows: ",
-  nrow(cd8_markers)
-)
-
-message(
-  "Significant positive marker rows: ",
-  nrow(cd8_markers_sig)
-)
-
-
-# ------------------------------------------------------------
-# 12.6 Check marker coverage across clusters
-# ------------------------------------------------------------
-
-clusters_with_markers <- sort(
-  unique(
-    as.character(cd8_markers_sig$cluster)
-  )
-)
-
-all_clusters <- sort(
-  unique(
-    as.character(cd8_clusters)
-  )
-)
-
-clusters_without_markers <- setdiff(
-  all_clusters,
-  clusters_with_markers
-)
-
-if (length(clusters_without_markers) > 0) {
-  warning(
-    "Clusters without significant positive markers: ",
-    paste(
-      clusters_without_markers,
-      collapse = ", "
-    )
-  )
-}
-
-message("")
-message("Significant-marker coverage by cluster:")
-
-marker_counts_by_cluster <- table(
-  cd8_markers_sig$cluster
-)
-
-print(marker_counts_by_cluster)
-
-
-# ------------------------------------------------------------
-# 12.7 Rank markers within each cluster
-# ------------------------------------------------------------
-
-cd8_markers_ranked <- cd8_markers_sig[
-  order(
-    as.numeric(
-      as.character(cd8_markers_sig$cluster)
-    ),
-    -cd8_markers_sig$avg_log2FC,
-    cd8_markers_sig$p_val_adj
-  ),
-  ,
-  drop = FALSE
-]
-
-
-# ------------------------------------------------------------
-# 12.8 Extract top 10 markers per cluster
-# ------------------------------------------------------------
-
-top10_cd8_markers <- cd8_markers_ranked |>
-  dplyr::group_by(cluster) |>
-  dplyr::slice_head(n = 10) |>
-  dplyr::ungroup()
-
-message("")
-message("Top 10 markers per CD8 cluster:")
-
-print(
-  top10_cd8_markers[
-    ,
-    c(
-      "cluster",
-      "gene",
-      "avg_log2FC",
-      "pct.1",
-      "pct.2",
-      "p_val_adj"
-    )
-  ],
-  row.names = FALSE
-)
-
-
-# ------------------------------------------------------------
-# 12.9 Save complete marker table
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
+    "No positive cluster markers were identified."
   )
 }
 
 write.csv(
   cd8_markers,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_all_cluster_markers.csv"
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_markers_all.csv"
   ),
   row.names = FALSE
 )
+
+
+###############################################################################
+# 35. TOP 20 MARKERS PER CLUSTER
+###############################################################################
+
+top_markers <- cd8_markers %>%
+  
+  dplyr::group_by(
+    cluster
+  ) %>%
+  
+  dplyr::arrange(
+    dplyr::desc(avg_log2FC),
+    .by_group = TRUE
+  ) %>%
+  
+  dplyr::slice_head(
+    n = 20
+  ) %>%
+  
+  dplyr::ungroup()
 
 write.csv(
-  cd8_markers_sig,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_significant_cluster_markers.csv"
-  ),
-  row.names = FALSE
-)
-
-write.csv(
-  top10_cd8_markers,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_top10_markers_per_cluster.csv"
+  top_markers,
+  file.path(
+    table_dir,
+    "phase4_cd8_top20_markers_per_cluster.csv"
   ),
   row.names = FALSE
 )
 
 
-# ------------------------------------------------------------
-# 12.10 Record marker-analysis parameters
-# ------------------------------------------------------------
+###############################################################################
+# 36. TOP MARKER HEATMAP — PNG
+###############################################################################
 
-cd8_obj@misc$Phase4_Markers <- list(
-  method = "FindAllMarkers",
-  assay = "RNA",
-  expression_layer = "data",
-  test = "wilcox",
-  only_positive = TRUE,
-  min_pct = 0.25,
-  logfc_threshold = 0.25,
-  significance_threshold =
-    "adjusted p-value < 0.05"
+heatmap_genes <- cd8_markers %>%
+  
+  dplyr::group_by(
+    cluster
+  ) %>%
+  
+  dplyr::arrange(
+    dplyr::desc(avg_log2FC),
+    .by_group = TRUE
+  ) %>%
+  
+  dplyr::slice_head(
+    n = 5
+  ) %>%
+  
+  dplyr::pull(gene) %>%
+  
+  unique()
+
+heatmap_genes <- intersect(
+  heatmap_genes,
+  rownames(cd8_obj)
 )
 
-
-# ------------------------------------------------------------
-# 12.11 Save checkpoint
-# ------------------------------------------------------------
-
-checkpoint_dir <- here::here(
-  "results",
-  "rds_objects"
-)
-
-if (!dir.exists(checkpoint_dir)) {
-  dir.create(
-    checkpoint_dir,
-    recursive = TRUE
+if (length(heatmap_genes) > 0) {
+  
+  cd8_obj <- ScaleData(
+    cd8_obj,
+    assay = "RNA",
+    features = heatmap_genes,
+    verbose = FALSE
+  )
+  
+  p_heatmap <- DoHeatmap(
+    cd8_obj,
+    features = heatmap_genes,
+    group.by = "CD8_Cluster"
+  ) +
+    ggtitle(
+      "Top exploratory markers by CD8 cluster"
+    )
+  
+  ggsave(
+    file.path(
+      figure_dir,
+      "phase4_cd8_top_markers_heatmap.png"
+    ),
+    p_heatmap,
+    width = 12,
+    height = 10,
+    dpi = 300
   )
 }
 
-saveRDS(
-  cd8_obj,
-  file = file.path(
-    checkpoint_dir,
-    "phase4_cd8_markers.rds"
+
+###############################################################################
+# 37. BIOLOGICAL PROGRAM DEFINITIONS
+###############################################################################
+#
+# HYBRID PHASE 4 APPROACH
+#
+# We distinguish three levels of evidence:
+#
+#   1. LINEAGE EVIDENCE
+#      Does the cluster retain evidence of conventional CD8/T-cell identity,
+#      or does it show evidence of another/noncanonical population?
+#
+#   2. TRANSCRIPTIONAL PROGRAMS
+#      What biological programs are relatively prominent?
+#
+#   3. CLUSTER MARKERS
+#      Which genes distinguish the cluster from the other CD8-labelled cells?
+#
+# IMPORTANT:
+#   Program scores are descriptive.
+#   They are NOT used by themselves to define biological states.
+#
+###############################################################################
+
+programs <- list(
+  
+  Naive_Memory = c(
+    "CCR7",
+    "LTB",
+    "IL7R",
+    "MAL",
+    "TCF7",
+    "LEF1",
+    "LTB"
+  ),
+  
+  Cytotoxic = c(
+    "NKG7",
+    "CCL5",
+    "GNLY",
+    "GZMB",
+    "GZMH",
+    "GZMK",
+    "PRF1",
+    "CTSW",
+    "FGFBP2",
+    "CX3CR1"
+  ),
+  
+  Activation = c(
+    "CD69",
+    "IL2RA",
+    "HLA-DRA",
+    "HLA-DRB1",
+    "TNFRSF4",
+    "TNFRSF9",
+    "CD38"
+  ),
+  
+  Dysfunction_Associated = c(
+    "PDCD1",
+    "TOX",
+    "TIGIT",
+    "CTLA4",
+    "HAVCR2",
+    "LAG3",
+    "CXCR4",
+    "RGS1",
+    "LAYN",
+    "CXCL13"
+  ),
+  
+  Immediate_Early_Response = c(
+    "FOS",
+    "JUN",
+    "JUNB",
+    "DUSP1",
+    "DUSP2",
+    "DUSP4",
+    "EGR1",
+    "EGR2",
+    "NR4A1"
+  ),
+  
+  NK_Like = c(
+    "NKG7",
+    "GNLY",
+    "KLRD1",
+    "KLRF1",
+    "KLRC1",
+    "KLRC2",
+    "TYROBP",
+    "FCER1G",
+    "FCGR3A"
+  ),
+  
+  Nonconventional_T = c(
+    "TRDC",
+    "TRGC1",
+    "TRGC2",
+    "TRDV1",
+    "TRDV2",
+    "TRGV2",
+    "TRGV4",
+    "TRGV5",
+    "TRGV8",
+    "TRGV9",
+    "KLRB1",
+    "SLC4A10",
+    "ZBTB16"
+  ),
+  
+  Tissue_Resident_Associated = c(
+    "CD69",
+    "ITGA1",
+    "CXCR6",
+    "ZNF683",
+    "ITGAE"
+  ),
+  
+  Proliferation = c(
+    "MKI67",
+    "TOP2A",
+    "STMN1",
+    "TYMS",
+    "PCNA"
   )
 )
 
 
-# ------------------------------------------------------------
-# 12.12 SECTION 12 CHECKPOINT
-# ------------------------------------------------------------
+###############################################################################
+# 38. LINEAGE / BIOLOGICAL ADJUDICATION PANELS
+###############################################################################
+#
+# These panels are used as evidence streams rather than automatic labels.
+#
+# The purpose is to distinguish:
+#
+#   - conventional CD8-associated populations
+#   - NK-like populations
+#   - gamma-delta-like populations
+#   - Treg-associated populations
+#   - other unexpected / ambiguous populations
+#
+# Unexpected populations are retained rather than removed.
+###############################################################################
 
-message("")
-message("============================================================")
-message("SECTION 12 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("CD8 clusters: ", length(unique(cd8_clusters)))
-message("Total positive marker rows: ", nrow(cd8_markers))
-message(
-  "Significant positive marker rows: ",
-  nrow(cd8_markers_sig)
-)
-message(
-  "Clusters without significant markers: ",
-  length(clusters_without_markers)
-)
-message("Complete marker table saved.")
-message("Significant marker table saved.")
-message("Top-10 marker table saved.")
-message("Checkpoint object saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 13 — CD8 MARKER VALIDATION
-# ============================================================
-
-message("============================================================")
-message("SECTION 13 — CD8 MARKER VALIDATION")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 13.1 Define biological marker panels
-# ------------------------------------------------------------
-
-marker_panels <- list(
+lineage_panels <- list(
   
   Conventional_T_CD8 = c(
     "CD3D",
@@ -2541,35 +1637,13 @@ marker_panels <- list(
     "CD8B"
   ),
   
-  Naive_Memory = c(
-    "CCR7",
-    "LTB",
-    "IL7R",
-    "MAL",
-    "LTB",
-    "TCF7",
-    "LEF1",
-    "MALAT1"
-  ),
-  
-  Cytotoxic = c(
+  NK_Associated = c(
     "NKG7",
-    "CCL5",
     "GNLY",
-    "GZMB",
-    "GZMH",
-    "FGFBP2",
-    "PRF1",
-    "GZMK",
-    "CX3CR1"
-  ),
-  
-  NK = c(
     "KLRD1",
     "KLRF1",
     "KLRC1",
     "KLRC2",
-    "KLRC3",
     "TYROBP",
     "FCER1G",
     "NCR3",
@@ -2589,6 +1663,267 @@ marker_panels <- list(
     "TRGV9"
   ),
   
+  Treg_Associated = c(
+    "CD4",
+    "IL7R",
+    "FOXP3",
+    "IL2RA",
+    "CTLA4",
+    "TNFRSF4",
+    "TNFRSF18",
+    "ICOS"
+  ),
+  
+  B_Cell_Associated = c(
+    "CD79A",
+    "MS4A1",
+    "CD37",
+    "CD74",
+    "HLA-DRA"
+  ),
+  
+  Myeloid_Associated = c(
+    "LYZ",
+    "S100A8",
+    "S100A9",
+    "FCGR3A",
+    "CTSD"
+  )
+)
+
+lineage_panels_present <- lapply(
+  lineage_panels,
+  function(x) {
+    intersect(
+      unique(x),
+      rownames(cd8_obj)
+    )
+  }
+)
+
+lineage_panels_present <- lineage_panels_present[
+  lengths(lineage_panels_present) >= 2
+]
+
+message("\nLineage adjudication panels:")
+print(lineage_panels_present)
+
+
+###############################################################################
+# 39. ADD BIOLOGICAL PROGRAM SCORES
+###############################################################################
+
+programs_present <- lapply(
+  programs,
+  function(x) {
+    intersect(
+      unique(x),
+      rownames(cd8_obj)
+    )
+  }
+)
+
+programs_present <- programs_present[
+  lengths(programs_present) >= 2
+]
+
+message("\nGenes available for program scoring:")
+print(programs_present)
+
+
+for (program_name in names(programs_present)) {
+  
+  genes <- programs_present[[program_name]]
+  
+  temporary_name <- paste0(
+    "CD8Program_",
+    program_name,
+    "_"
+  )
+  
+  cd8_obj <- AddModuleScore(
+    cd8_obj,
+    features = list(genes),
+    assay = "RNA",
+    name = temporary_name,
+    seed = 20260916
+  )
+  
+  generated_name <- paste0(
+    temporary_name,
+    "1"
+  )
+  
+  final_name <- paste0(
+    "Program_",
+    program_name
+  )
+  
+  if (
+    generated_name %in%
+    colnames(cd8_obj@meta.data)
+  ) {
+    
+    program_vector <-
+      cd8_obj@meta.data[[generated_name]]
+    
+    names(program_vector) <-
+      rownames(cd8_obj@meta.data)
+    
+    cd8_obj <- AddMetaData(
+      cd8_obj,
+      metadata = program_vector,
+      col.name = final_name
+    )
+    
+    cd8_obj@meta.data[[generated_name]] <- NULL
+  }
+}
+
+
+###############################################################################
+# 40. PROGRAM SCORE COLUMNS
+###############################################################################
+
+program_columns <- grep(
+  "^Program_",
+  colnames(cd8_obj@meta.data),
+  value = TRUE
+)
+
+message("\nProgram score columns:")
+print(program_columns)
+
+
+###############################################################################
+# 41. PROGRAM SCORES BY CLUSTER
+###############################################################################
+
+if (length(program_columns) > 0) {
+  
+  program_cluster_summary <- cd8_obj@meta.data %>%
+    
+    dplyr::group_by(
+      CD8_Cluster
+    ) %>%
+    
+    dplyr::summarise(
+      
+      dplyr::across(
+        dplyr::all_of(program_columns),
+        ~ mean(
+          .x,
+          na.rm = TRUE
+        )
+      ),
+      
+      Cells = dplyr::n(),
+      
+      .groups = "drop"
+    ) %>%
+    
+    dplyr::arrange(
+      suppressWarnings(
+        as.numeric(CD8_Cluster)
+      )
+    )
+  
+  write.csv(
+    program_cluster_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_program_scores_by_cluster.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+###############################################################################
+# 42. PROGRAM SCORE UMAPS
+###############################################################################
+
+for (program_col in program_columns) {
+  
+  p <- FeaturePlot(
+    cd8_obj,
+    features = program_col,
+    reduction = "umap_cd8"
+  ) +
+    ggtitle(
+      program_col
+    )
+  
+  safe_name <- gsub(
+    "[^A-Za-z0-9_]+",
+    "_",
+    program_col
+  )
+  
+  ggsave(
+    file.path(
+      figure_dir,
+      paste0(
+        "phase4_cd8_",
+        safe_name,
+        "_umap.png"
+      )
+    ),
+    p,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+
+###############################################################################
+# 43. LINEAGE DOTPLOT
+###############################################################################
+
+lineage_genes <- unique(
+  unlist(
+    lineage_panels_present
+  )
+)
+
+if (length(lineage_genes) > 0) {
+  
+  p_lineage <- DotPlot(
+    cd8_obj,
+    features = lineage_genes,
+    group.by = "CD8_Cluster"
+  ) +
+    RotatedAxis() +
+    ggtitle(
+      "CD8 cluster lineage-adjudication markers"
+    )
+  
+  ggsave(
+    file.path(
+      figure_dir,
+      "phase4_cd8_lineage_adjudication_dotplot.png"
+    ),
+    p_lineage,
+    width = 16,
+    height = 9,
+    dpi = 300
+  )
+}
+
+
+###############################################################################
+# 44. BIOLOGICAL STATE MARKER DOTPLOT
+###############################################################################
+
+state_marker_panels <- list(
+  
+  Conventional_T_CD8 = lineage_panels$Conventional_T_CD8,
+  
+  Naive_Memory = programs$Naive_Memory,
+  
+  Cytotoxic = programs$Cytotoxic,
+  
   Activation = c(
     "TNFRSF9",
     "DUSP4",
@@ -2600,7 +1935,7 @@ marker_panels <- list(
     "NR4A1"
   ),
   
-  Dysfunction_Exhaustion = c(
+  Dysfunction_Associated = c(
     "PDCD1",
     "TOX",
     "TIGIT",
@@ -2612,1214 +1947,2085 @@ marker_panels <- list(
     "LAYN"
   ),
   
-  CD4_Treg = c(
-    "CD4",
-    "IL7R",
-    "FOXP3",
-    "IL2RA",
-    "CTLA4",
-    "TNFRSF4",
-    "TNFRSF18",
-    "ICOS"
-  ),
+  NK_Associated = lineage_panels$NK_Associated,
   
-  Proliferation = c(
-    "MKI67",
-    "TOP2A",
-    "STMN1",
-    "TYMS",
-    "PCNA"
+  GammaDelta_T = lineage_panels$GammaDelta_T,
+  
+  Treg_Associated = lineage_panels$Treg_Associated,
+  
+  Proliferation = programs$Proliferation
+)
+
+state_marker_panels_present <- lapply(
+  state_marker_panels,
+  function(x) {
+    intersect(
+      unique(x),
+      rownames(cd8_obj)
+    )
+  }
+)
+
+state_marker_panels_present <- state_marker_panels_present[
+  lengths(state_marker_panels_present) >= 2
+]
+
+state_marker_genes <- unique(
+  unlist(
+    state_marker_panels_present
   )
 )
 
-
-# ------------------------------------------------------------
-# 13.2 Keep only genes present in the object
-# ------------------------------------------------------------
-
-all_features <- rownames(cd8_obj[["RNA"]])
-
-marker_panels_present <- lapply(
-  marker_panels,
-  function(x) intersect(x, all_features)
-)
-
-marker_panels_present <- marker_panels_present[
-  lengths(marker_panels_present) > 0
-]
-
-message("")
-message("Marker-panel coverage:")
-
-for (panel_name in names(marker_panels_present)) {
+if (length(state_marker_genes) > 0) {
   
-  message(
-    panel_name,
-    ": ",
-    length(marker_panels_present[[panel_name]]),
-    " genes present"
+  p_state_markers <- DotPlot(
+    cd8_obj,
+    features = state_marker_genes,
+    group.by = "CD8_Cluster"
+  ) +
+    RotatedAxis() +
+    ggtitle(
+      "CD8 biological state and lineage marker panels"
+    )
+  
+  ggsave(
+    file.path(
+      figure_dir,
+      "phase4_cd8_state_marker_panels_dotplot.png"
+    ),
+    p_state_markers,
+    width = 18,
+    height = 10,
+    dpi = 300
   )
 }
 
 
-# ------------------------------------------------------------
-# 13.3 Build ordered marker list
-# ------------------------------------------------------------
+###############################################################################
+# 45. TOP MARKER EVIDENCE
+###############################################################################
 
-marker_features <- unique(
-  unlist(
-    marker_panels_present,
-    use.names = FALSE
+top_marker_lookup <- cd8_markers %>%
+  
+  dplyr::group_by(
+    cluster
+  ) %>%
+  
+  dplyr::arrange(
+    dplyr::desc(avg_log2FC),
+    .by_group = TRUE
+  ) %>%
+  
+  dplyr::slice_head(
+    n = 50
+  ) %>%
+  
+  dplyr::summarise(
+    
+    Top50_Genes = paste(
+      gene,
+      collapse = ";"
+    ),
+    
+    .groups = "drop"
   )
+
+write.csv(
+  top_marker_lookup,
+  file.path(
+    table_dir,
+    "phase4_cd8_top50_marker_evidence.csv"
+  ),
+  row.names = FALSE
 )
 
-message("")
-message(
-  "Total unique validation markers present: ",
-  length(marker_features)
-)
 
+###############################################################################
+# 46. CLUSTER REPRESENTATION + PROGRAM EVIDENCE
+###############################################################################
 
-# ------------------------------------------------------------
-# 13.4 Generate DotPlot
-# ------------------------------------------------------------
+annotation_evidence <- cluster_representation
 
-message("")
-message("Generating CD8 marker-validation DotPlot...")
+if (length(program_columns) > 0) {
+  
+  annotation_evidence <-
+    annotation_evidence %>%
+    
+    dplyr::left_join(
+      program_cluster_summary,
+      by = "CD8_Cluster"
+    )
+}
 
-p_cd8_marker_dotplot <- Seurat::DotPlot(
-  object = cd8_obj,
-  assay = "RNA",
-  features = marker_features,
-  group.by = "seurat_clusters",
-  dot.scale = 6
-) +
-  ggplot2::ggtitle(
-    "CD8 subcluster marker validation"
-  ) +
-  ggplot2::theme_classic() +
-  ggplot2::theme(
-    axis.text.x = ggplot2::element_text(
-      angle = 90,
-      hjust = 1,
-      vjust = 0.5
+annotation_evidence <-
+  annotation_evidence %>%
+  
+  dplyr::left_join(
+    top_marker_lookup,
+    by = c(
+      "CD8_Cluster" = "cluster"
     )
   )
 
-print(p_cd8_marker_dotplot)
-
-
-# ------------------------------------------------------------
-# 13.5 Save DotPlot
-# ------------------------------------------------------------
-
-figures_dir <- here::here(
-  "results",
-  "figures"
+write.csv(
+  annotation_evidence,
+  file.path(
+    table_dir,
+    "phase4_cd8_annotation_evidence.csv"
+  ),
+  row.names = FALSE
 )
 
-if (!dir.exists(figures_dir)) {
-  dir.create(
-    figures_dir,
-    recursive = TRUE
+
+###############################################################################
+# 47. CLUSTER-LEVEL PROGRAM MATRIX
+###############################################################################
+
+if (length(program_columns) > 0) {
+  
+  cluster_program_matrix <- cd8_obj@meta.data %>%
+    
+    dplyr::group_by(
+      CD8_Cluster
+    ) %>%
+    
+    dplyr::summarise(
+      
+      dplyr::across(
+        dplyr::all_of(program_columns),
+        ~ mean(
+          .x,
+          na.rm = TRUE
+        )
+      ),
+      
+      .groups = "drop"
+    )
+  
+} else {
+  
+  cluster_program_matrix <- NULL
+}
+
+
+###############################################################################
+# 48. STANDARDIZED PROGRAM SCORES
+###############################################################################
+
+if (
+  !is.null(cluster_program_matrix) &&
+  length(program_columns) > 0
+) {
+  
+  for (col in program_columns) {
+    
+    cluster_program_matrix[[paste0(col, "_Z")]] <-
+      as.numeric(
+        scale(
+          cluster_program_matrix[[col]]
+        )
+      )
+  }
+}
+
+
+###############################################################################
+# 49. LINEAGE EVIDENCE AT CLUSTER LEVEL
+###############################################################################
+
+cluster_lineage_evidence <- NULL
+
+for (panel_name in names(lineage_panels_present)) {
+  
+  genes <- lineage_panels_present[[panel_name]]
+  
+  expression_matrix <- LayerData(
+    cd8_obj,
+    assay = "RNA",
+    layer = "data"
+  )
+  
+  genes <- intersect(
+    genes,
+    rownames(expression_matrix)
+  )
+  
+  if (length(genes) < 2) {
+    next
+  }
+  
+  panel_values <- Matrix::colMeans(
+    expression_matrix[
+      genes,
+      ,
+      drop = FALSE
+    ]
+  )
+  
+  panel_df <- tibble(
+    Cell = names(panel_values),
+    Panel_Score = as.numeric(panel_values)
+  )
+  
+  panel_df$CD8_Cluster <-
+    cd8_obj$CD8_Cluster[
+      match(
+        panel_df$Cell,
+        colnames(cd8_obj)
+      )
+    ]
+  
+  panel_summary <- panel_df %>%
+    
+    dplyr::group_by(
+      CD8_Cluster
+    ) %>%
+    
+    dplyr::summarise(
+      
+      !!paste0(
+        "Lineage_",
+        panel_name,
+        "_MeanExpression"
+      ) :=
+        mean(
+          Panel_Score,
+          na.rm = TRUE
+        ),
+      
+      !!paste0(
+        "Lineage_",
+        panel_name,
+        "_PositiveFraction"
+      ) :=
+        mean(
+          Panel_Score > 0,
+          na.rm = TRUE
+        ),
+      
+      .groups = "drop"
+    )
+  
+  if (is.null(cluster_lineage_evidence)) {
+    
+    cluster_lineage_evidence <-
+      panel_summary
+    
+  } else {
+    
+    cluster_lineage_evidence <-
+      dplyr::left_join(
+        cluster_lineage_evidence,
+        panel_summary,
+        by = "CD8_Cluster"
+      )
+  }
+}
+
+if (!is.null(cluster_lineage_evidence)) {
+  
+  write.csv(
+    cluster_lineage_evidence,
+    file.path(
+      table_dir,
+      "phase4_cd8_cluster_lineage_evidence.csv"
+    ),
+    row.names = FALSE
   )
 }
 
-ggplot2::ggsave(
-  filename = file.path(
-    figures_dir,
-    "phase4_cd8_marker_validation_dotplot.png"
+
+###############################################################################
+# 50. MARKER-PANEL OVERLAP WITH TOP CLUSTER MARKERS
+###############################################################################
+
+marker_overlap_rows <- list()
+
+for (cluster_id in unique(cd8_markers$cluster)) {
+  
+  cluster_top50 <- cd8_markers %>%
+    
+    dplyr::filter(
+      cluster == cluster_id
+    ) %>%
+    
+    dplyr::arrange(
+      dplyr::desc(avg_log2FC)
+    ) %>%
+    
+    dplyr::slice_head(
+      n = 50
+    ) %>%
+    
+    dplyr::pull(
+      gene
+    )
+  
+  for (panel_name in names(state_marker_panels_present)) {
+    
+    panel_genes <-
+      state_marker_panels_present[[panel_name]]
+    
+    overlap_genes <- intersect(
+      cluster_top50,
+      panel_genes
+    )
+    
+    marker_overlap_rows[[length(marker_overlap_rows) + 1]] <-
+      tibble(
+        
+        CD8_Cluster = as.character(cluster_id),
+        
+        Panel = panel_name,
+        
+        Top50_Overlap_Count =
+          length(overlap_genes),
+        
+        Top50_Overlap_Genes =
+          paste(
+            overlap_genes,
+            collapse = ";"
+          )
+      )
+  }
+}
+
+marker_panel_overlap <- bind_rows(
+  marker_overlap_rows
+)
+
+write.csv(
+  marker_panel_overlap,
+  file.path(
+    table_dir,
+    "phase4_cd8_marker_panel_overlap.csv"
   ),
-  plot = p_cd8_marker_dotplot,
-  width = 15,
-  height = 9,
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 51. CREATE A STRUCTURED ANNOTATION ADJUDICATION TABLE
+###############################################################################
+#
+# IMPORTANT:
+#
+# We intentionally DO NOT automatically assign final biological states here.
+#
+# Instead, the table organizes all evidence needed for adjudication:
+#
+#   - cluster size
+#   - donor representation
+#   - lineage evidence
+#   - transcriptional programs
+#   - top markers
+#
+###############################################################################
+
+annotation_adjudication <- annotation_evidence
+
+if (!is.null(cluster_lineage_evidence)) {
+  
+  annotation_adjudication <-
+    annotation_adjudication %>%
+    
+    dplyr::left_join(
+      cluster_lineage_evidence,
+      by = "CD8_Cluster"
+    )
+}
+
+if (!is.null(cluster_program_matrix)) {
+  
+  annotation_adjudication <-
+    annotation_adjudication %>%
+    
+    dplyr::left_join(
+      cluster_program_matrix,
+      by = "CD8_Cluster",
+      suffix = c(
+        "",
+        "_ProgramMatrix"
+      )
+    )
+}
+
+annotation_adjudication <-
+  annotation_adjudication %>%
+  
+  dplyr::mutate(
+    
+    Potential_Noncanonical_Lineage =
+      case_when(
+        
+        !is.na(
+          Lineage_GammaDelta_T_MeanExpression
+        ) &
+          Lineage_GammaDelta_T_MeanExpression >
+          Lineage_Conventional_T_CD8_MeanExpression
+        ~ "GammaDelta_like_evidence",
+        
+        !is.na(
+          Lineage_NK_Associated_MeanExpression
+        ) &
+          Lineage_NK_Associated_MeanExpression >
+          Lineage_Conventional_T_CD8_MeanExpression
+        ~ "NK_like_evidence",
+        
+        !is.na(
+          Lineage_Treg_Associated_MeanExpression
+        ) &
+          Lineage_Treg_Associated_MeanExpression >
+          Lineage_Conventional_T_CD8_MeanExpression
+        ~ "Treg_associated_evidence",
+        
+        TRUE ~ "No_dominant_noncanonical_signal"
+      ),
+    
+    CD8_Lineage_Evidence =
+      case_when(
+        
+        Lineage_Conventional_T_CD8_MeanExpression >
+          0
+        ~ "CD8_T_evidence_present",
+        
+        TRUE ~ "CD8_lineage_evidence_uncertain"
+      ),
+    
+    Annotation_Status =
+      "REVIEW_REQUIRED"
+  )
+
+write.csv(
+  annotation_adjudication,
+  file.path(
+    table_dir,
+    "phase4_cd8_annotation_adjudication_table.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 52. ANNOTATION EVIDENCE HEATMAP
+###############################################################################
+
+if (
+  !is.null(cluster_program_matrix) &&
+  length(program_columns) > 0
+) {
+  
+  program_heatmap_data <-
+    cluster_program_matrix %>%
+    
+    dplyr::select(
+      CD8_Cluster,
+      dplyr::all_of(
+        program_columns
+      )
+    ) %>%
+    
+    tibble::column_to_rownames(
+      "CD8_Cluster"
+    )
+  
+  program_heatmap_matrix <-
+    as.matrix(
+      program_heatmap_data
+    )
+  
+  if (
+    nrow(program_heatmap_matrix) > 1 &&
+    ncol(program_heatmap_matrix) > 1
+  ) {
+    
+    program_heatmap_matrix <-
+      t(
+        scale(
+          program_heatmap_matrix
+        )
+      )
+    
+    heatmap_df <-
+      as.data.frame(
+        program_heatmap_matrix
+      )
+    
+    heatmap_df$Program <-
+      rownames(
+        heatmap_df
+      )
+    
+    heatmap_long <-
+      tidyr::pivot_longer(
+        heatmap_df,
+        cols = -Program,
+        names_to = "CD8_Cluster",
+        values_to = "Z"
+      )
+    
+    p_program_heatmap <-
+      ggplot(
+        heatmap_long,
+        aes(
+          x = CD8_Cluster,
+          y = Program,
+          fill = Z
+        )
+      ) +
+      
+      geom_tile() +
+      
+      scale_fill_gradient2(
+        midpoint = 0
+      ) +
+      
+      theme_minimal() +
+      
+      theme(
+        axis.text.x =
+          element_text(
+            angle = 45,
+            hjust = 1
+          )
+      ) +
+      
+      labs(
+        title =
+          "CD8 transcriptional program landscape",
+        x = "CD8 cluster",
+        y = "Program",
+        fill = "Cluster Z-score"
+      )
+    
+    ggsave(
+      file.path(
+        figure_dir,
+        "phase4_cd8_program_heatmap.png"
+      ),
+      p_program_heatmap,
+      width = 12,
+      height = 8,
+      dpi = 300
+    )
+  }
+}
+
+
+###############################################################################
+# 53. NONCANONICAL / AMBIGUITY FLAGS
+###############################################################################
+
+if (!is.null(annotation_adjudication)) {
+  
+  noncanonical_summary <-
+    annotation_adjudication %>%
+    
+    dplyr::select(
+      CD8_Cluster,
+      Cluster_Cells,
+      Donors_Represented,
+      Largest_Donor_Fraction,
+      Potential_Noncanonical_Lineage,
+      CD8_Lineage_Evidence,
+      Annotation_Status
+    )
+  
+  write.csv(
+    noncanonical_summary,
+    file.path(
+      table_dir,
+      "phase4_cd8_noncanonical_review_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+###############################################################################
+# 54. MANUAL BIOLOGICAL ANNOTATION TEMPLATE
+###############################################################################
+
+manual_annotation_template <-
+  annotation_adjudication %>%
+  
+  dplyr::select(
+    CD8_Cluster,
+    Cluster_Cells,
+    Donors_Represented,
+    Clinical_States_Represented,
+    Largest_Donor_Fraction,
+    Potential_Noncanonical_Lineage,
+    CD8_Lineage_Evidence,
+    Top50_Genes
+  ) %>%
+  
+  dplyr::mutate(
+    
+    Final_Annotation = NA_character_,
+    
+    Biological_Class = NA_character_,
+    
+    Annotation_Confidence = NA_character_,
+    
+    Evidence_Rationale = NA_character_
+  )
+
+write.csv(
+  manual_annotation_template,
+  file.path(
+    table_dir,
+    "phase4_cd8_manual_annotation_template.csv"
+  ),
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 55. UMAP BY CLUSTER
+###############################################################################
+#
+# Already generated above, retained as primary discovery representation.
+###############################################################################
+
+
+###############################################################################
+# 56. CLUSTER × DONOR REPRESENTATION FIGURE
+###############################################################################
+
+cluster_donor_fraction <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    Donor,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::group_by(
+    Donor
+  ) %>%
+  
+  dplyr::mutate(
+    Fraction_of_Donor_CD8 =
+      Cells / sum(Cells)
+  ) %>%
+  
+  dplyr::ungroup()
+
+p_cluster_donor <-
+  ggplot(
+    cluster_donor_fraction,
+    aes(
+      x = CD8_Cluster,
+      y = Fraction_of_Donor_CD8
+    )
+  ) +
+  
+  geom_boxplot(
+    outlier.shape = NA
+  ) +
+  
+  geom_jitter(
+    width = 0.15,
+    height = 0,
+    alpha = 0.35,
+    size = 0.8
+  ) +
+  
+  theme_minimal() +
+  
+  labs(
+    title =
+      "CD8 cluster representation across donors",
+    x = "CD8 cluster",
+    y = "Fraction of donor CD8 cells"
+  )
+
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_cluster_representation_by_donor.png"
+  ),
+  p_cluster_donor,
+  width = 11,
+  height = 7,
   dpi = 300
 )
 
 
-# ------------------------------------------------------------
-# 13.6 Save marker panels
-# ------------------------------------------------------------
+###############################################################################
+# 57. DESCRIPTIVE CLUSTER COMPOSITION ACROSS CLINICAL STATES
+###############################################################################
+#
+# IMPORTANT:
+#
+# This remains descriptive.
+#
+# These cell-level proportions do NOT constitute clinical-state inference.
+# Formal donor-aware inference belongs to Phase 6.
+###############################################################################
 
-marker_panel_table <- dplyr::bind_rows(
-  lapply(
-    names(marker_panels_present),
-    function(panel_name) {
-      data.frame(
-        panel = panel_name,
-        gene = marker_panels_present[[panel_name]],
-        stringsAsFactors = FALSE
-      )
-    }
+cluster_phase_counts <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    Phase,
+    name = "Cells"
   )
-)
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
-  )
-}
 
 write.csv(
-  marker_panel_table,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_marker_validation_panels.csv"
+  cluster_phase_counts,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_phase_counts.csv"
   ),
   row.names = FALSE
 )
 
-
-# ------------------------------------------------------------
-# 13.7 SECTION 13 CHECKPOINT
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 13 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("CD8 clusters: ", length(unique(cd8_obj$seurat_clusters)))
-message(
-  "Validation markers present: ",
-  length(marker_features)
-)
-message("Marker-validation DotPlot saved.")
-message("Marker-panel table saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 14 — CD8 BIOLOGICAL ANNOTATION
-# ============================================================
-
-message("============================================================")
-message("SECTION 14 — CD8 BIOLOGICAL ANNOTATION")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 14.1 Lock cluster-to-state annotations
-# ------------------------------------------------------------
-
-cd8_cluster_labels <- c(
-  "0"  = "CD8_Memory_GPR183",
-  "1"  = "CD8_Naive_Memory",
-  "2"  = "CD8_PD1_Dysfunctional",
-  "3"  = "NK_like",
-  "4"  = "CD8_Activated",
-  "5"  = "CD8_Immediate_Early_Stress",
-  "6"  = "CD8_Memory_P2RY8",
-  "7"  = "GammaDelta_T_like",
-  "8"  = "NK_like",
-  "9"  = "Ig_Associated_Ambiguous",
-  "10" = "Treg_like",
-  "11" = "GammaDelta_NK_like_TRM",
-  "12" = "Cytotoxic_GammaDelta_like",
-  "13" = "GammaDelta_Nonconventional",
-  "14" = "GammaDelta_IL7R",
-  "15" = "CD8_Cytotoxic_Effector",
-  "16" = "NK_like_Nonconventional"
-)
-
-
-# ------------------------------------------------------------
-# 14.2 Validate annotation coverage
-# ------------------------------------------------------------
-
-observed_clusters <- sort(
-  unique(
-    as.character(cd8_obj$seurat_clusters)
-  )
-)
-
-annotated_clusters <- sort(
-  names(cd8_cluster_labels)
-)
-
-if (!identical(
-  observed_clusters,
-  annotated_clusters
-)) {
-  stop(
-    "Cluster annotation map does not exactly cover ",
-    "the observed CD8 clusters."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 14.3 Apply annotations
-# ------------------------------------------------------------
-
-cd8_obj$CD8_State <- unname(
-  cd8_cluster_labels[
-    as.character(cd8_obj$seurat_clusters)
-  ]
-)
-
-
-# ------------------------------------------------------------
-# 14.4 Validate annotations
-# ------------------------------------------------------------
-
-if (any(is.na(cd8_obj$CD8_State))) {
-  stop(
-    "Some CD8 cells received missing biological annotations."
-  )
-}
-
-state_counts <- table(
-  cd8_obj$CD8_State
-)
-
-message("")
-message("CD8 biological-state counts:")
-print(state_counts)
-
-
-# ------------------------------------------------------------
-# 14.5 Save cluster annotation table
-# ------------------------------------------------------------
-
-annotation_table <- data.frame(
-  cluster = names(cd8_cluster_labels),
-  CD8_State = unname(cd8_cluster_labels),
-  stringsAsFactors = FALSE
-)
-
-annotation_table$n_cells <- as.integer(
-  table(
-    factor(
-      as.character(cd8_obj$seurat_clusters),
-      levels = names(cd8_cluster_labels)
-    )
-  )
-)
-
-annotation_table$fraction <- (
-  annotation_table$n_cells /
-    ncol(cd8_obj)
-)
-
-
-# ------------------------------------------------------------
-# 14.6 Save annotation table
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
-  )
-}
-
-write.csv(
-  annotation_table,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_biological_annotations.csv"
-  ),
-  row.names = FALSE
-)
-
-
-# ------------------------------------------------------------
-# 14.7 Record annotation framework
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_Annotation <- list(
-  annotation_basis =
-    "Cluster marker expression and marker-panel validation",
-  principle =
-    "Conservative biological interpretation; no forced canonical CD8 state",
-  cluster_labels =
-    cd8_cluster_labels,
-  note =
-    "NK-like, gamma-delta-like, Treg-like and Ig-associated populations retained as observed subpopulations rather than removed."
-)
-
-
-# ------------------------------------------------------------
-# 14.8 Save checkpoint
-# ------------------------------------------------------------
-
-checkpoint_dir <- here::here(
-  "results",
-  "rds_objects"
-)
-
-if (!dir.exists(checkpoint_dir)) {
-  dir.create(
-    checkpoint_dir,
-    recursive = TRUE
-  )
-}
-
-saveRDS(
-  cd8_obj,
-  file = file.path(
-    checkpoint_dir,
-    "phase4_cd8_annotated.rds"
-  )
-)
-
-
-# ------------------------------------------------------------
-# 14.9 SECTION 14 CHECKPOINT
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 14 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message("Clusters annotated: ", length(cd8_cluster_labels))
-message("Missing CD8 states: ", sum(is.na(cd8_obj$CD8_State)))
-message("Annotation table saved.")
-message("Annotated CD8 object saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 15 — CD8 STATE COMPOSITION ACROSS CLINICAL STATES
-# ============================================================
-
-message("============================================================")
-message("SECTION 15 — CD8 STATE × CLINICAL STATE COMPOSITION")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 15.1 Validate required metadata
-# ------------------------------------------------------------
-
-required_metadata <- c(
-  "CD8_State",
-  "Phase",
-  "Donor"
-)
-
-missing_metadata <- setdiff(
-  required_metadata,
-  colnames(cd8_obj@meta.data)
-)
-
-if (length(missing_metadata) > 0) {
-  stop(
-    "Missing required metadata: ",
-    paste(missing_metadata, collapse = ", ")
-  )
-}
-
-
-# ------------------------------------------------------------
-# 15.2 Cell-level counts
-# ------------------------------------------------------------
-
-cell_counts <- cd8_obj@meta.data |>
-  dplyr::count(
-    Phase,
-    CD8_State,
-    name = "n_cells"
-  )
-
-message("")
-message("CD8 state counts by clinical state:")
-print(cell_counts)
-
-
-# ------------------------------------------------------------
-# 15.3 Within-phase composition
-# ------------------------------------------------------------
-
-phase_totals <- cd8_obj@meta.data |>
-  dplyr::count(
-    Phase,
-    name = "phase_total"
-  )
-
-cell_composition <- cell_counts |>
-  dplyr::left_join(
-    phase_totals,
-    by = "Phase"
-  ) |>
+cluster_phase_proportions <- cluster_phase_counts %>%
+  
+  dplyr::group_by(
+    Phase
+  ) %>%
+  
   dplyr::mutate(
-    proportion = n_cells / phase_total,
-    percentage = 100 * proportion
-  )
+    Proportion_Within_CD8 =
+      Cells / sum(Cells)
+  ) %>%
+  
+  dplyr::ungroup()
 
-message("")
-message("Within-clinical-state CD8 composition:")
-print(cell_composition)
+write.csv(
+  cluster_phase_proportions,
+  file.path(
+    table_dir,
+    "phase4_cd8_cluster_phase_proportions.csv"
+  ),
+  row.names = FALSE
+)
 
 
-# ------------------------------------------------------------
-# 15.4 Donor-level composition
-# ------------------------------------------------------------
+###############################################################################
+# 58. DONOR-LEVEL DESCRIPTIVE CLUSTER COMPOSITION
+###############################################################################
 
-donor_state_counts <- cd8_obj@meta.data |>
+donor_cluster_counts <- cd8_obj@meta.data %>%
+  
   dplyr::count(
     Donor,
     Phase,
-    CD8_State,
-    name = "n_cells"
+    CD8_Cluster,
+    name = "Cells"
   )
 
-donor_totals <- cd8_obj@meta.data |>
+donor_cluster_totals <- cd8_obj@meta.data %>%
+  
   dplyr::count(
     Donor,
-    name = "donor_total"
+    name = "Total_CD8_Cells"
   )
 
-donor_composition <- donor_state_counts |>
+donor_cluster_proportions <-
+  donor_cluster_counts %>%
+  
   dplyr::left_join(
-    donor_totals,
+    donor_cluster_totals,
     by = "Donor"
-  ) |>
+  ) %>%
+  
   dplyr::mutate(
-    proportion = n_cells / donor_total,
-    percentage = 100 * proportion
+    Proportion_of_Donor_CD8 =
+      Cells / Total_CD8_Cells,
+    
+    Percentage_of_Donor_CD8 =
+      100 * Proportion_of_Donor_CD8
   )
 
-message("")
-message(
-  "Donor-level composition calculated for ",
-  dplyr::n_distinct(donor_composition$Donor),
-  " donors."
+write.csv(
+  donor_cluster_proportions,
+  file.path(
+    table_dir,
+    "phase4_cd8_donor_cluster_proportions.csv"
+  ),
+  row.names = FALSE
 )
 
 
-# ------------------------------------------------------------
-# 15.5 Donor-level summary by clinical state
-# ------------------------------------------------------------
+###############################################################################
+# 59. DONOR-LEVEL SUMMARY BY CLINICAL STATE
+###############################################################################
 
-donor_state_summary <- donor_composition |>
+donor_cluster_summary <-
+  donor_cluster_proportions %>%
+  
   dplyr::group_by(
     Phase,
-    CD8_State
-  ) |>
+    CD8_Cluster
+  ) %>%
+  
   dplyr::summarise(
-    n_donors = dplyr::n_distinct(Donor),
-    mean_percentage = mean(percentage),
-    median_percentage = median(percentage),
-    sd_percentage = sd(percentage),
+    
+    n_donors =
+      dplyr::n_distinct(
+        Donor
+      ),
+    
+    mean_percentage =
+      mean(
+        Percentage_of_Donor_CD8,
+        na.rm = TRUE
+      ),
+    
+    median_percentage =
+      median(
+        Percentage_of_Donor_CD8,
+        na.rm = TRUE
+      ),
+    
+    sd_percentage =
+      sd(
+        Percentage_of_Donor_CD8,
+        na.rm = TRUE
+      ),
+    
     .groups = "drop"
   )
 
-
-# ------------------------------------------------------------
-# 15.6 Save composition tables
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
+write.csv(
+  donor_cluster_summary,
+  file.path(
+    table_dir,
+    "phase4_cd8_donor_cluster_summary_by_phase.csv"
+  ),
+  row.names = FALSE
 )
 
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
+
+###############################################################################
+# 60. FINAL PHASE 4 METADATA
+###############################################################################
+
+phase4_analysis_vector <- rep(
+  "CD8_state_discovery_and_biological_adjudication",
+  ncol(cd8_obj)
+)
+
+names(phase4_analysis_vector) <-
+  colnames(cd8_obj)
+
+cd8_obj <- AddMetaData(
+  cd8_obj,
+  metadata = phase4_analysis_vector,
+  col.name = "Phase4_Analysis"
+)
+
+
+phase4_expression_vector <- rep(
+  "Processed_log_CP10K",
+  ncol(cd8_obj)
+)
+
+names(phase4_expression_vector) <-
+  colnames(cd8_obj)
+
+cd8_obj <- AddMetaData(
+  cd8_obj,
+  metadata = phase4_expression_vector,
+  col.name = "Phase4_Expression"
+)
+
+
+phase4_donor_unit_vector <- rep(
+  "Biological_replicate",
+  ncol(cd8_obj)
+)
+
+names(phase4_donor_unit_vector) <-
+  colnames(cd8_obj)
+
+cd8_obj <- AddMetaData(
+  cd8_obj,
+  metadata = phase4_donor_unit_vector,
+  col.name = "Phase4_Donor_Unit"
+)
+
+
+phase4_inference_vector <- rep(
+  "Exploratory_cell_state_characterization",
+  ncol(cd8_obj)
+)
+
+names(phase4_inference_vector) <-
+  colnames(cd8_obj)
+
+cd8_obj <- AddMetaData(
+  cd8_obj,
+  metadata = phase4_inference_vector,
+  col.name = "Phase4_Inference"
+)
+
+
+###############################################################################
+# 61. FINAL CELL-ID INTEGRITY CHECK
+###############################################################################
+
+object_cells <- colnames(cd8_obj)
+
+if (!identical(
+  rownames(cd8_obj@meta.data),
+  object_cells
+)) {
+  
+  stop(
+    "FINAL VALIDATION FAILED: metadata cell names do not exactly match ",
+    "Seurat object cell names."
   )
 }
 
-write.csv(
-  cell_counts,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_state_counts_by_phase.csv"
-  ),
-  row.names = FALSE
+for (assay_name in names(cd8_obj@assays)) {
+  
+  assay_cells <- Cells(
+    cd8_obj[[assay_name]]
+  )
+  
+  if (!setequal(
+    assay_cells,
+    object_cells
+  )) {
+    
+    stop(
+      "FINAL VALIDATION FAILED: assay ",
+      assay_name,
+      " contains cells not present in the Seurat object."
+    )
+  }
+}
+
+for (reduction_name in names(cd8_obj@reductions)) {
+  
+  reduction_cells <- Cells(
+    cd8_obj[[reduction_name]]
+  )
+  
+  if (!setequal(
+    reduction_cells,
+    object_cells
+  )) {
+    
+    stop(
+      "FINAL VALIDATION FAILED: reduction ",
+      reduction_name,
+      " contains cells not present in the Seurat object."
+    )
+  }
+}
+
+for (graph_name in names(cd8_obj@graphs)) {
+  
+  graph_cells <- rownames(
+    cd8_obj[[graph_name]]
+  )
+  
+  if (!setequal(
+    graph_cells,
+    object_cells
+  )) {
+    
+    stop(
+      "FINAL VALIDATION FAILED: graph ",
+      graph_name,
+      " contains cells not present in the Seurat object."
+    )
+  }
+}
+
+if (!identical(
+  names(Idents(cd8_obj)),
+  object_cells
+)) {
+  
+  stop(
+    "FINAL VALIDATION FAILED: active identities are not aligned ",
+    "with Seurat cell names."
+  )
+}
+
+message(
+  "\nCell-ID integrity checks passed."
 )
 
-write.csv(
-  cell_composition,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_state_composition_by_phase.csv"
-  ),
-  row.names = FALSE
+
+###############################################################################
+# 62. FINAL SEURAT VALIDITY CHECK
+###############################################################################
+
+validity_result <- tryCatch(
+  
+  {
+    
+    validObject(
+      cd8_obj
+    )
+    
+    TRUE
+  },
+  
+  error = function(e) {
+    
+    message(
+      "\nSeurat validity check FAILED:"
+    )
+    
+    message(
+      e$message
+    )
+    
+    FALSE
+  }
 )
 
-write.csv(
-  donor_composition,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_donor_level_composition.csv"
-  ),
-  row.names = FALSE
-)
+if (!validity_result) {
+  
+  stop(
+    "Phase 4 object is invalid and will NOT be saved."
+  )
+}
 
-write.csv(
-  donor_state_summary,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_donor_state_summary.csv"
-  ),
-  row.names = FALSE
+message(
+  "\nSeurat object validity check passed."
 )
 
 
-# ------------------------------------------------------------
-# 15.7 Composition heatmap
-# ------------------------------------------------------------
+###############################################################################
+# 63. FINAL PHASE 4 EVIDENCE SUMMARY
+###############################################################################
 
-composition_heatmap <- cell_composition |>
-  dplyr::select(
-    Phase,
-    CD8_State,
-    percentage
-  ) |>
-  tidyr::pivot_wider(
-    names_from = Phase,
-    values_from = percentage,
-    values_fill = 0
+final_cluster_summary <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::left_join(
+    cluster_representation,
+    by = "CD8_Cluster",
+    suffix = c(
+      "_Final",
+      ""
+    )
+  ) %>%
+  
+  dplyr::arrange(
+    suppressWarnings(
+      as.numeric(CD8_Cluster)
+    )
   )
 
-heatmap_matrix <- as.matrix(
-  composition_heatmap[
-    ,
-    setdiff(
-      colnames(composition_heatmap),
-      "CD8_State"
-    ),
-    drop = FALSE
-  ]
+write.csv(
+  final_cluster_summary,
+  file.path(
+    table_dir,
+    "phase4_cd8_final_cluster_summary.csv"
+  ),
+  row.names = FALSE
 )
 
-rownames(heatmap_matrix) <- composition_heatmap$CD8_State
 
-heatmap_df <- as.data.frame(
-  as.table(heatmap_matrix)
-)
+###############################################################################
+# 64. FINAL OBJECT VALIDATION
+###############################################################################
 
-colnames(heatmap_df) <- c(
-  "CD8_State",
-  "Phase",
-  "Percentage"
-)
-
-p_composition_heatmap <- ggplot2::ggplot(
-  heatmap_df,
-  ggplot2::aes(
-    x = Phase,
-    y = CD8_State,
-    fill = Percentage
+if (ncol(cd8_obj) != expected_cd8_n) {
+  
+  stop(
+    "Final CD8 cell count changed unexpectedly.\n",
+    "Expected: ",
+    expected_cd8_n,
+    "\nFound: ",
+    ncol(cd8_obj)
   )
-) +
-  ggplot2::geom_tile() +
-  ggplot2::scale_fill_gradient(
-    name = "Percentage"
-  ) +
-  ggplot2::labs(
-    title = "CD8 subpopulation composition across clinical states",
-    x = "Clinical state",
-    y = "CD8 state"
-  ) +
-  ggplot2::theme_classic() +
-  ggplot2::theme(
-    axis.text.x = ggplot2::element_text(
-      angle = 45,
-      hjust = 1
+}
+
+if (nrow(cd8_obj) != expected_total_features) {
+  
+  stop(
+    "Final CD8 feature count changed unexpectedly.\n",
+    "Expected: ",
+    expected_total_features,
+    "\nFound: ",
+    nrow(cd8_obj)
+  )
+}
+
+required_reductions <- c(
+  "pca",
+  "umap_cd8"
+)
+
+missing_reductions <- setdiff(
+  required_reductions,
+  Reductions(cd8_obj)
+)
+
+if (length(missing_reductions) > 0) {
+  
+  stop(
+    "Missing required reductions: ",
+    paste(
+      missing_reductions,
+      collapse = ", "
+    )
+  )
+}
+
+required_final_metadata <- c(
+  "CD8_Cluster",
+  "Phase4_Analysis",
+  "Phase4_Expression",
+  "Phase4_Donor_Unit",
+  "Phase4_Inference"
+)
+
+missing_final_metadata <- setdiff(
+  required_final_metadata,
+  colnames(cd8_obj@meta.data)
+)
+
+if (length(missing_final_metadata) > 0) {
+  
+  stop(
+    "Final object missing required metadata: ",
+    paste(
+      missing_final_metadata,
+      collapse = ", "
+    )
+  )
+}
+
+
+###############################################################################
+# 65. SAVE FINAL PHASE 4 OBJECT
+###############################################################################
+
+saveRDS(
+  cd8_obj,
+  final_output
+)
+
+
+###############################################################################
+# 66. PHASE 4 COMPUTATIONAL PIPELINE END
+###############################################################################
+#
+# The computational Phase 4 object has now been generated and saved.
+#
+# Final biological adjudication and the authoritative Phase 4 status check
+# are performed in Section 67.
+#
+###############################################################################
+
+message("")
+message("============================================================")
+message("PHASE 4 COMPUTATIONAL PIPELINE COMPLETE")
+message("============================================================")
+
+message(
+  "Primary computational object saved:"
+)
+
+message(
+  final_output
+)
+
+message("")
+message(
+  "Final biological adjudication and Phase 4 closeout continue in Section 67."
+)
+
+message("============================================================")
+
+
+###############################################################################
+# 67. FINAL BIOLOGICAL ADJUDICATION AND PHASE 4 CLOSEOUT
+###############################################################################
+#
+# Purpose
+# -------
+# Convert the evidence assembled during Sections 34–54 into a transparent,
+# conservative biological adjudication of the 16 CD8-labelled clusters.
+#
+# This section does NOT:
+#   - recluster cells
+#   - change PCA/UMAP parameters
+#   - change cluster assignments
+#   - perform clinical-state inference
+#   - perform differential expression
+#   - perform pathway enrichment
+#   - perform cell-cell communication analysis
+#
+# It adds explicitly documented biological annotations to the already
+# validated Phase 4 object.
+#
+# Important interpretation boundary
+# ----------------------------------
+# These annotations are computational, transcriptional characterizations.
+# They are not experimentally validated identities, clinical-state labels,
+# causal mechanisms, or claims of disease progression.
+#
+###############################################################################
+
+message("")
+message("============================================================")
+message("SECTION 67: FINAL BIOLOGICAL ADJUDICATION AND PHASE 4 CLOSEOUT")
+message("============================================================")
+
+
+###############################################################################
+# 67.1 FINAL NONCANONICAL LINEAGE EVIDENCE FLAGS
+###############################################################################
+
+# These are REVIEW FLAGS based on the lineage evidence already generated in
+# Sections 49-53.
+#
+# They are NOT automated cell-type classifications.
+# They document where the existing evidence supports consideration of a
+# noncanonical population during biological adjudication.
+
+annotation_adjudication_final <- annotation_adjudication %>%
+  
+  dplyr::mutate(
+    
+    Potential_Noncanonical_Lineage = dplyr::case_when(
+      
+      CD8_Cluster %in% c(7, 11, 13, 15) ~
+        "GammaDelta_associated",
+      
+      CD8_Cluster %in% c(6, 8, 9, 14) ~
+        "NK_associated",
+      
+      CD8_Cluster == 10 ~
+        "NK_GammaDelta_associated",
+      
+      TRUE ~
+        "No_strong_noncanonical_signal"
     )
   )
 
 
-# ------------------------------------------------------------
-# 15.8 Save heatmap
-# ------------------------------------------------------------
-
-figures_dir <- here::here(
-  "results",
-  "figures"
+write.csv(
+  annotation_adjudication_final,
+  file.path(
+    table_dir,
+    "phase4_cd8_annotation_adjudication_table_final.csv"
+  ),
+  row.names = FALSE
 )
 
-if (!dir.exists(figures_dir)) {
-  dir.create(
-    figures_dir,
-    recursive = TRUE
+
+###############################################################################
+# 67.2 FINAL BIOLOGICAL ADJUDICATION OF THE 16 CD8 CLUSTERS
+###############################################################################
+#
+# These annotations are conservative biological interpretations of the
+# transcriptional evidence generated in Phase 4.
+#
+# They are NOT claims of experimentally validated cell identity.
+# They are NOT clinical-state labels.
+# They are NOT pathway annotations.
+# They are NOT causal biological claims.
+###############################################################################
+
+final_cd8_annotations <- tibble::tribble(
+  
+  ~CD8_Cluster, ~CD8_Biological_Annotation, ~CD8_Biological_Class,
+  ~CD8_Annotation_Confidence, ~Donor_Representation_Note,
+  
+  0,
+  "GZMK-associated memory-like CD8 T-cell",
+  "Conventional_CD8_associated",
+  "Moderate",
+  "Broad donor representation",
+  
+  1,
+  "Memory-associated conventional T-cell",
+  "Conventional_T_associated",
+  "Moderate",
+  "Broad donor representation with donor concentration",
+  
+  2,
+  "Activated/dysfunction-associated CD8 T-cell",
+  "Conventional_CD8_associated",
+  "High",
+  "Broad donor representation with donor concentration",
+  
+  3,
+  "Immediate-early-response CD8-associated population",
+  "Transcriptional_program",
+  "High",
+  "Broad donor representation",
+  
+  4,
+  "Activated/dysfunction-associated CD8 T-cell",
+  "Conventional_CD8_associated",
+  "High",
+  "Broad donor representation with donor concentration",
+  
+  5,
+  "Activation/tissue-associated CD8-associated population",
+  "Conventional_CD8_associated",
+  "Moderate",
+  "Broad donor representation",
+  
+  6,
+  "NK-like cytotoxic nonconventional T-cell population",
+  "Noncanonical_T_associated",
+  "High",
+  "Broad donor representation",
+  
+  7,
+  "Gamma-delta-like cytotoxic T-cell population",
+  "GammaDelta_associated",
+  "High",
+  "Strongly donor concentrated",
+  
+  8,
+  "NK-like/nonconventional cytotoxic T-cell population",
+  "Noncanonical_T_associated",
+  "High",
+  "Broad donor representation",
+  
+  9,
+  "NK-like cytotoxic population",
+  "NK_associated",
+  "High",
+  "Strongly donor concentrated",
+  
+  10,
+  "NK/gamma-delta-like nonconventional T-cell population",
+  "Noncanonical_T_associated",
+  "High",
+  "Broad donor representation with donor concentration",
+  
+  11,
+  "Gamma-delta-like T-cell population",
+  "GammaDelta_associated",
+  "High",
+  "Broad donor representation",
+  
+  12,
+  "Activated/dysfunction-associated tissue-associated CD8 T-cell",
+  "Conventional_CD8_associated",
+  "High",
+  "Donor concentrated",
+  
+  13,
+  "Gamma-delta-like cytotoxic T-cell population",
+  "GammaDelta_associated",
+  "High",
+  "Extremely donor concentrated",
+  
+  14,
+  "NK-like cytotoxic population",
+  "NK_associated",
+  "High",
+  "Strongly donor concentrated",
+  
+  15,
+  "Gamma-delta-like nonconventional T-cell population",
+  "GammaDelta_associated",
+  "High",
+  "Moderately donor concentrated"
+)
+
+
+if (
+  nrow(final_cd8_annotations) !=
+  length(unique(cd8_obj$CD8_Cluster))
+) {
+  
+  stop(
+    "Final annotation table does not contain exactly one row per CD8 cluster."
   )
 }
 
-ggplot2::ggsave(
-  filename = file.path(
-    figures_dir,
-    "phase4_cd8_state_composition_heatmap.png"
+
+if (
+  !setequal(
+    final_cd8_annotations$CD8_Cluster,
+    unique(as.numeric(as.character(cd8_obj$CD8_Cluster)))
+  )
+) {
+  
+  stop(
+    "Final annotation clusters do not match the clusters present in the Seurat object."
+  )
+}
+
+
+write.csv(
+  final_cd8_annotations,
+  file.path(
+    table_dir,
+    "phase4_cd8_final_adjudicated_annotations.csv"
   ),
-  plot = p_composition_heatmap,
-  width = 9,
+  row.names = FALSE
+)
+
+
+###############################################################################
+# 67.3 ADD FINAL BIOLOGICAL ANNOTATIONS TO SEURAT METADATA
+###############################################################################
+
+# Use AddMetaData() with named cell-level vectors to preserve cell-ID alignment.
+
+annotation_columns <- c(
+  "CD8_Biological_Annotation",
+  "CD8_Biological_Class",
+  "CD8_Annotation_Confidence",
+  "Donor_Representation_Note"
+)
+
+
+for (annotation_column in annotation_columns) {
+  
+  cluster_to_value <- setNames(
+    final_cd8_annotations[[annotation_column]],
+    as.character(
+      final_cd8_annotations$CD8_Cluster
+    )
+  )
+  
+  cell_values <- unname(
+    cluster_to_value[
+      as.character(
+        cd8_obj$CD8_Cluster
+      )
+    ]
+  )
+  
+  names(cell_values) <- colnames(cd8_obj)
+  
+  cd8_obj <- AddMetaData(
+    cd8_obj,
+    metadata = cell_values,
+    col.name = annotation_column
+  )
+}
+
+
+###############################################################################
+# 67.4 VALIDATE FINAL BIOLOGICAL ANNOTATION METADATA
+###############################################################################
+
+if (
+  any(
+    is.na(
+      cd8_obj$CD8_Biological_Annotation
+    )
+  )
+) {
+  
+  stop(
+    "Some CD8 cells did not receive a final biological annotation."
+  )
+}
+
+
+if (
+  any(
+    is.na(
+      cd8_obj$CD8_Biological_Class
+    )
+  )
+) {
+  
+  stop(
+    "Some CD8 cells did not receive a biological class."
+  )
+}
+
+
+if (
+  !identical(
+    rownames(cd8_obj@meta.data),
+    colnames(cd8_obj)
+  )
+) {
+  
+  stop(
+    "Cell-ID alignment failed after adding final biological annotations."
+  )
+}
+
+
+message(
+  "\nFinal biological annotations successfully added to metadata."
+)
+
+
+###############################################################################
+# 67.5 FINAL BIOLOGICAL ANNOTATION SUMMARY
+###############################################################################
+
+final_annotation_summary <- cd8_obj@meta.data %>%
+  
+  dplyr::count(
+    CD8_Cluster,
+    CD8_Biological_Annotation,
+    CD8_Biological_Class,
+    CD8_Annotation_Confidence,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::arrange(
+    as.numeric(
+      as.character(
+        CD8_Cluster
+      )
+    )
+  )
+
+
+write.csv(
+  final_annotation_summary,
+  file.path(
+    table_dir,
+    "phase4_cd8_final_biological_annotation_summary.csv"
+  ),
+  row.names = FALSE
+)
+
+
+message(
+  "\nFinal biological annotation summary:"
+)
+
+print(
+  final_annotation_summary
+)
+
+
+###############################################################################
+# 67.6 FINAL BIOLOGICAL ANNOTATION UMAP
+###############################################################################
+
+p_final_annotation <- DimPlot(
+  cd8_obj,
+  reduction = "umap_cd8",
+  group.by = "CD8_Biological_Annotation",
+  label = TRUE,
+  repel = TRUE
+) +
+  
+  ggplot2::ggtitle(
+    "CD8-labelled compartment: final biological adjudication"
+  ) +
+  
+  ggplot2::theme_classic()
+
+
+ggsave(
+  file.path(
+    figure_dir,
+    "phase4_cd8_final_biological_annotations.png"
+  ),
+  p_final_annotation,
+  width = 12,
   height = 8,
   dpi = 300
 )
 
-print(p_composition_heatmap)
 
+###############################################################################
+# 67.7 FINAL DONOR REPRESENTATION SUMMARY
+###############################################################################
 
-# ------------------------------------------------------------
-# 15.9 Record composition methodology
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_Composition <- list(
-  cell_level =
-    "Counts and within-clinical-state proportions",
-  replication_unit =
-    "Donor",
-  donor_level =
-    "Donor-level state proportions summarized by clinical state",
-  interpretation =
-    "Cell-level composition is descriptive; donor-level summaries preserve biological replication."
-)
-
-
-# ------------------------------------------------------------
-# 15.10 Save checkpoint
-# ------------------------------------------------------------
-
-checkpoint_dir <- here::here(
-  "results",
-  "rds_objects"
-)
-
-if (!dir.exists(checkpoint_dir)) {
-  dir.create(
-    checkpoint_dir,
-    recursive = TRUE
-  )
-}
-
-saveRDS(
-  cd8_obj,
-  file = file.path(
-    checkpoint_dir,
-    "phase4_cd8_composition.rds"
-  )
-)
-
-
-# ------------------------------------------------------------
-# 15.11 SECTION 15 CHECKPOINT
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("SECTION 15 CHECKPOINT")
-message("============================================================")
-message("CD8 cells: ", ncol(cd8_obj))
-message(
-  "Clinical states: ",
-  dplyr::n_distinct(cd8_obj$Phase)
-)
-message(
-  "CD8 states: ",
-  dplyr::n_distinct(cd8_obj$CD8_State)
-)
-message(
-  "Donors: ",
-  dplyr::n_distinct(cd8_obj$Donor)
-)
-message("Cell-level composition table saved.")
-message("Donor-level composition table saved.")
-message("Composition heatmap saved.")
-message("Checkpoint object saved.")
-message("============================================================")
-
-# ============================================================
-# SECTION 16 — FINAL CD8 BIOLOGICAL CHARACTERIZATION
-#              AND PATHWAY ENRICHMENT
-# ============================================================
-
-message("============================================================")
-message("SECTION 16 — FINAL CD8 BIOLOGICAL CHARACTERIZATION")
-message("============================================================")
-
-
-# ------------------------------------------------------------
-# 16.1 Required packages
-# ------------------------------------------------------------
-
-required_packages <- c(
-  "clusterProfiler",
-  "org.Hs.eg.db"
-)
-
-missing_packages <- required_packages[
-  !vapply(
-    required_packages,
-    requireNamespace,
-    quietly = TRUE,
-    FUN.VALUE = logical(1)
-  )
-]
-
-if (length(missing_packages) > 0) {
-  stop(
-    "Required packages are missing: ",
-    paste(missing_packages, collapse = ", "),
-    "."
-  )
-}
-
-
-# ------------------------------------------------------------
-# 16.2 Define biologically interpretable CD8 states
-# ------------------------------------------------------------
-
-selected_cd8_states <- c(
-  "CD8_Memory_GPR183",
-  "CD8_Naive_Memory",
-  "CD8_PD1_Dysfunctional",
-  "CD8_Activated",
-  "CD8_Immediate_Early_Stress",
-  "CD8_Memory_P2RY8",
-  "CD8_Cytotoxic_Effector"
-)
-
-message("")
-message("Selected conventional CD8 states:")
-print(selected_cd8_states)
-
-
-# ------------------------------------------------------------
-# 16.3 Confirm states exist
-# ------------------------------------------------------------
-
-observed_states <- unique(
-  as.character(cd8_obj$CD8_State)
-)
-
-missing_states <- setdiff(
-  selected_cd8_states,
-  observed_states
-)
-
-if (length(missing_states) > 0) {
-  stop(
-    "Selected CD8 states are missing: ",
-    paste(missing_states, collapse = ", ")
-  )
-}
-
-
-# ------------------------------------------------------------
-# 16.4 Retrieve significant positive markers
-# ------------------------------------------------------------
-
-if (!exists("cd8_markers_sig")) {
+final_donor_annotation_summary <- cd8_obj@meta.data %>%
   
-  cd8_markers_sig <- Seurat::FindAllMarkers(
-    object = cd8_obj,
-    assay = "RNA",
-    only.pos = TRUE,
-    min.pct = 0.25,
-    logfc.threshold = 0.25,
-    test.use = "wilcox",
-    verbose = TRUE
-  )
-}
-
-
-# ------------------------------------------------------------
-# 16.5 Map selected biological states to their clusters
-# ------------------------------------------------------------
-
-state_cluster_map <- data.frame(
-  cluster = names(cd8_cluster_labels),
-  CD8_State = unname(cd8_cluster_labels),
-  stringsAsFactors = FALSE
-)
-
-selected_state_clusters <- state_cluster_map[
-  state_cluster_map$CD8_State %in% selected_cd8_states,
-  ,
-  drop = FALSE
-]
-
-message("")
-message("Selected-state cluster mapping:")
-print(selected_state_clusters, row.names = FALSE)
-
-
-# ------------------------------------------------------------
-# 16.6 Extract significant markers for selected states
-# ------------------------------------------------------------
-
-selected_markers <- cd8_markers_sig[
-  as.character(cd8_markers_sig$cluster) %in%
-    selected_state_clusters$cluster,
-  ,
-  drop = FALSE
-]
-
-selected_markers <- selected_markers[
-  order(
-    as.numeric(
-      as.character(selected_markers$cluster)
-    ),
-    -selected_markers$avg_log2FC,
-    selected_markers$p_val_adj
-  ),
-  ,
-  drop = FALSE
-]
-
-selected_markers <- dplyr::left_join(
-  selected_markers,
-  selected_state_clusters,
-  by = "cluster"
-)
-
-message("")
-message(
-  "Significant markers across selected CD8 states: ",
-  nrow(selected_markers)
-)
-
-
-# ------------------------------------------------------------
-# 16.7 Save selected-state marker table
-# ------------------------------------------------------------
-
-tables_dir <- here::here(
-  "results",
-  "tables"
-)
-
-if (!dir.exists(tables_dir)) {
-  dir.create(
-    tables_dir,
-    recursive = TRUE
-  )
-}
-
-write.csv(
-  selected_markers,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_selected_state_markers.csv"
-  ),
-  row.names = FALSE
-)
-
-
-# ------------------------------------------------------------
-# 16.8 Top 15 markers per selected state
-# ------------------------------------------------------------
-
-top15_selected_markers <- selected_markers |>
-  dplyr::group_by(CD8_State) |>
-  dplyr::slice_head(n = 15) |>
+  dplyr::count(
+    Donor,
+    Phase,
+    CD8_Cluster,
+    CD8_Biological_Annotation,
+    name = "Cells"
+  ) %>%
+  
+  dplyr::group_by(
+    Donor
+  ) %>%
+  
+  dplyr::mutate(
+    Total_CD8_Cells = sum(Cells),
+    Fraction_of_Donor_CD8 = Cells / Total_CD8_Cells
+  ) %>%
+  
   dplyr::ungroup()
 
+
 write.csv(
-  top15_selected_markers,
-  file = file.path(
-    tables_dir,
-    "phase4_cd8_selected_state_top15_markers.csv"
+  final_donor_annotation_summary,
+  file.path(
+    table_dir,
+    "phase4_cd8_final_donor_annotation_representation.csv"
   ),
   row.names = FALSE
 )
 
-message("")
-message("Top markers by selected CD8 state:")
-print(
-  top15_selected_markers[
-    ,
-    c(
-      "CD8_State",
-      "gene",
-      "avg_log2FC",
-      "pct.1",
-      "pct.2",
-      "p_val_adj"
-    )
-  ],
-  n = 105,
-  row.names = FALSE
+
+###############################################################################
+# 67.8 FINAL PHASE 4 VALIDATION
+###############################################################################
+
+message(
+  "\nRunning final Phase 4 closeout validation..."
 )
 
-# ============================================================
-# PHASE 4 — FINAL CD8 OBJECT SAVE
-# ============================================================
 
-message("============================================================")
-message("PHASE 4 — FINAL CD8 OBJECT")
-message("============================================================")
+# Cell IDs
+object_cells_final <- colnames(cd8_obj)
 
 
-# ------------------------------------------------------------
-# 1. Final integrity checks
-# ------------------------------------------------------------
-
-if (!inherits(cd8_obj, "Seurat")) {
-  stop("cd8_obj is not a Seurat object.")
-}
-
-if (ncol(cd8_obj) != 44229) {
+if (
+  !identical(
+    rownames(cd8_obj@meta.data),
+    object_cells_final
+  )
+) {
+  
   stop(
-    "Unexpected CD8 cell count: ",
-    ncol(cd8_obj)
+    "FINAL PHASE 4 VALIDATION FAILED: metadata cell names are not aligned."
   )
 }
 
-if (!all(cd8_obj$Transferred_Label == "CD8_T")) {
+
+# Expected cell count
+if (
+  ncol(cd8_obj) != expected_cd8_n
+) {
+  
   stop(
-    "CD8 object contains cells outside the Phase 3 CD8 definition."
+    "FINAL PHASE 4 VALIDATION FAILED: CD8 cell count changed."
   )
 }
 
-if (any(is.na(cd8_obj$CD8_State))) {
+
+# Expected feature count
+if (
+  nrow(cd8_obj) != expected_total_features
+) {
+  
   stop(
-    "Missing CD8 biological-state annotations."
-  )
-}
-
-if (any(is.na(cd8_obj$seurat_clusters))) {
-  stop(
-    "Missing CD8 cluster assignments."
-  )
-}
-
-if (!"pca" %in% names(cd8_obj@reductions)) {
-  stop("PCA reduction is missing.")
-}
-
-if (!"umap" %in% names(cd8_obj@reductions)) {
-  stop("UMAP reduction is missing.")
-}
-
-if (!"RNA_snn" %in% names(cd8_obj@graphs)) {
-  stop("RNA_snn graph is missing.")
-}
-
-if (length(Seurat::VariableFeatures(
-  cd8_obj,
-  assay = "RNA"
-)) != 2000) {
-  stop(
-    "Expected exactly 2,000 CD8 HVGs."
+    "FINAL PHASE 4 VALIDATION FAILED: feature count changed."
   )
 }
 
 
-# ------------------------------------------------------------
-# 2. Create final output directory
-# ------------------------------------------------------------
-
-final_rds_dir <- here::here(
-  "results",
-  "rds_objects"
-)
-
-if (!dir.exists(final_rds_dir)) {
-  dir.create(
-    final_rds_dir,
-    recursive = TRUE
-  )
-}
-
-
-# ------------------------------------------------------------
-# 3. Record final Phase 4 status
-# ------------------------------------------------------------
-
-cd8_obj@misc$Phase4_Status <- list(
-  
-  status =
-    "COMPLETE",
-  
-  analysis_population =
-    "CD8_T cells defined by Phase 3 transferred annotation",
-  
-  n_cells =
-    ncol(cd8_obj),
-  
-  n_genes =
-    nrow(cd8_obj),
-  
-  variable_features =
-    length(
-      Seurat::VariableFeatures(
-        cd8_obj,
-        assay = "RNA"
-      )
-    ),
-  
-  PCA =
-    "50 PCs calculated",
-  
-  downstream_PCs =
-    "1:20",
-  
-  clustering =
-    "RNA_snn, resolution 0.4, algorithm 1",
-  
-  n_clusters =
-    dplyr::n_distinct(
-      cd8_obj$seurat_clusters
-    ),
-  
-  UMAP =
-    "2-dimensional UMAP using PCs 1:20",
-  
-  biological_states =
-    dplyr::n_distinct(
-      cd8_obj$CD8_State
-    ),
-  
-  clinical_states =
-    dplyr::n_distinct(
-      cd8_obj$Phase
-    ),
-  
-  donors =
-    dplyr::n_distinct(
+# Donor count
+if (
+  length(
+    unique(
       cd8_obj$Donor
-    ),
+    )
+  ) != 23
+) {
   
-  marker_validation =
-    "Completed",
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: donor count changed."
+  )
+}
+
+
+# Clinical-state count
+if (
+  length(
+    unique(
+      cd8_obj$Phase
+    )
+  ) != 5
+) {
   
-  clinical_state_composition =
-    "Completed",
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: clinical-state count changed."
+  )
+}
+
+
+# Cluster count
+if (
+  length(
+    unique(
+      cd8_obj$CD8_Cluster
+    )
+  ) != 16
+) {
   
-  pathway_enrichment =
-    "NOT performed; reserved for Phase 7",
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: expected 16 CD8 clusters."
+  )
+}
+
+
+# Biological annotation coverage
+#
+# Multiple computational clusters may legitimately share the same
+# biological annotation. Therefore, the correct validation is that
+# every one of the 16 clusters has a non-missing annotation, NOT
+# that there are 16 unique annotation strings.
+
+cluster_annotation_check <- cd8_obj@meta.data %>%
+  dplyr::distinct(
+    CD8_Cluster,
+    CD8_Biological_Annotation
+  )
+
+if (
+  nrow(cluster_annotation_check) != 16
+) {
   
-  differential_expression =
-    "NOT performed; reserved for Phase 6",
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: not all 16 CD8 clusters ",
+    "have exactly one biological annotation."
+  )
+}
+
+
+if (
+  any(
+    is.na(
+      cluster_annotation_check$CD8_Biological_Annotation
+    )
+  )
+) {
   
-  cellchat =
-    "NOT performed; reserved for Phase 8",
-  
-  phase4_endpoint =
-    "Section 16.8"
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: at least one CD8 cluster ",
+    "has a missing biological annotation."
+  )
+}
+
+
+message(
+  "Biological annotation coverage validated: ",
+  nrow(cluster_annotation_check),
+  " clusters annotated; ",
+  length(
+    unique(
+      cd8_obj$CD8_Biological_Annotation
+    )
+  ),
+  " unique biological annotation categories."
 )
 
 
-# ------------------------------------------------------------
-# 4. Save final frozen object
-# ------------------------------------------------------------
-
-final_cd8_path <- file.path(
-  final_rds_dir,
-  "phase4_final_cd8_analysis.rds"
+# Required reductions
+required_phase4_reductions <- c(
+  "pca",
+  "umap_cd8"
 )
+
+
+missing_phase4_reductions <- setdiff(
+  required_phase4_reductions,
+  Reductions(cd8_obj)
+)
+
+
+if (
+  length(missing_phase4_reductions) > 0
+) {
+  
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: missing reductions: ",
+    paste(
+      missing_phase4_reductions,
+      collapse = ", "
+    )
+  )
+}
+
+
+# Required final metadata
+required_phase4_metadata <- c(
+  "CD8_Cluster",
+  "CD8_Biological_Annotation",
+  "CD8_Biological_Class",
+  "CD8_Annotation_Confidence",
+  "Donor_Representation_Note",
+  "Phase4_Analysis",
+  "Phase4_Expression",
+  "Phase4_Donor_Unit",
+  "Phase4_Inference"
+)
+
+
+missing_phase4_metadata <- setdiff(
+  required_phase4_metadata,
+  colnames(cd8_obj@meta.data)
+)
+
+
+if (
+  length(missing_phase4_metadata) > 0
+) {
+  
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: missing metadata: ",
+    paste(
+      missing_phase4_metadata,
+      collapse = ", "
+    )
+  )
+}
+
+
+# Seurat validity
+final_validity_result <- validObject(
+  cd8_obj,
+  test = TRUE
+)
+
+
+if (
+  !isTRUE(final_validity_result)
+) {
+  
+  stop(
+    "FINAL PHASE 4 VALIDATION FAILED: Seurat object is invalid."
+  )
+}
+
+
+message(
+  "Final Phase 4 validation passed."
+)
+
+
+###############################################################################
+# 67.9 SAVE FINAL ADJUDICATED PHASE 4 OBJECT
+###############################################################################
+
+final_adjudicated_output <- file.path(
+  rds_dir,
+  "phase4_final_cd8_analysis_adjudicated.rds"
+)
+
 
 saveRDS(
   cd8_obj,
-  file = final_cd8_path
+  final_adjudicated_output
 )
 
 
-# ------------------------------------------------------------
-# 5. Verify that the saved object can be reloaded
-# ------------------------------------------------------------
-
-message("")
-message("Verifying saved RDS...")
-
-cd8_final_check <- readRDS(
-  final_cd8_path
-)
-
-if (!inherits(cd8_final_check, "Seurat")) {
-  stop(
-    "Saved RDS could not be reloaded as a Seurat object."
+if (
+  !file.exists(
+    final_adjudicated_output
   )
-}
-
-if (ncol(cd8_final_check) != ncol(cd8_obj)) {
+) {
+  
   stop(
-    "Reloaded object has a different cell count."
-  )
-}
-
-if (!identical(
-  colnames(cd8_final_check),
-  colnames(cd8_obj)
-)) {
-  stop(
-    "Reloaded object cell order differs from the in-memory object."
-  )
-}
-
-if (!identical(
-  cd8_final_check$CD8_State,
-  cd8_obj$CD8_State
-)) {
-  stop(
-    "Reloaded biological-state annotations differ."
+    "Final adjudicated Phase 4 RDS was not created."
   )
 }
 
 
-# ------------------------------------------------------------
-# 6. Final checkpoint
-# ------------------------------------------------------------
-
-message("")
-message("============================================================")
-message("PHASE 4 FINAL CHECKPOINT")
-message("============================================================")
-message("Status: COMPLETE")
-message("CD8 cells: ", ncol(cd8_final_check))
-message("Genes: ", nrow(cd8_final_check))
 message(
-  "CD8 HVGs: ",
+  "\nFinal adjudicated Phase 4 object saved:"
+)
+
+message(
+  final_adjudicated_output
+)
+
+
+###############################################################################
+# 67.10 WRITE PHASE 4 SUMMARY
+###############################################################################
+
+phase4_summary <- c(
+  
+  "PHASE 4: CD8 T-CELL TRANSCRIPTIONAL STATE ANALYSIS",
+  "",
+  
+  "Dataset:",
+  "GSE182159 liver-only single-cell RNA-seq dataset.",
+  "",
+  
+  paste0(
+    "Input compartment: ",
+    ncol(cd8_obj),
+    " cells labelled CD8_T in Phase 3, representing ",
+    length(unique(cd8_obj$Donor)),
+    " donors across ",
+    length(unique(cd8_obj$Phase)),
+    " clinical states."
+  ),
+  "",
+  
+  "Computational analysis:",
+  "CD8-specific variable feature selection, PCA, nearest-neighbor graph",
+  "construction, SNN clustering, UMAP visualization, exploratory cluster-marker",
+  "identification, biological program scoring, lineage-panel assessment, and",
+  "donor-representation diagnostics were performed using the existing processed",
+  "log-CP10K expression representation.",
+  "",
+  
+  "Biological characterization:",
+  paste0(
+    "Sixteen transcriptional clusters were identified within the Phase-3 ",
+    "CD8-labelled compartment."
+  ),
+  "",
+  
+  "The cluster evidence supported:",
+  "- conventional CD8-associated transcriptional populations;",
+  "- activation/dysfunction-associated transcriptional states;",
+  "- an immediate-early-response transcriptional program;",
+  "- NK-like/noncanonical populations; and",
+  "- gamma-delta-like/noncanonical T-cell populations.",
+  "",
+  
+  "Interpretation boundary:",
+  "Cluster-level composition is descriptive. Donor was retained as the biological",
+  "replicate. Several clusters showed substantial donor concentration and were",
+  "therefore not interpreted as cohort-wide clinical-state features.",
+  "",
+  
+  "No clinical-state differential inference was performed in Phase 4.",
+  "Formal donor-aware clinical-state inference is reserved for downstream analysis.",
+  "",
+  
+  "No pathway enrichment or cell-cell communication analysis was performed in",
+  "Phase 4. These analyses are reserved for later phases.",
+  "",
+  
+  "Final interpretation:",
+  "Phase 4 establishes a biologically adjudicated map of transcriptional",
+  "heterogeneity within the Phase-3 CD8-labelled compartment for use in",
+  "downstream donor-aware analysis.",
+  "",
+  
+  "Important limitation:",
+  "The biological annotations represent computational transcriptional",
+  "characterization of the public dataset and are not experimentally validated",
+  "cell identities or causal biological states."
+)
+
+
+writeLines(
+  phase4_summary,
+  con = file.path(
+    table_dir,
+    "phase4_cd8_summary.txt"
+  )
+)
+
+
+###############################################################################
+# 67.11 FINAL PHASE 4 STATUS AND COMPLETION
+###############################################################################
+
+message("")
+message("============================================================")
+message("PHASE 4 FULLY CLOSED")
+message("============================================================")
+
+message(
+  "CD8-labelled cells: ",
+  ncol(cd8_obj)
+)
+
+message(
+  "Features: ",
+  nrow(cd8_obj)
+)
+
+message(
+  "Donors: ",
   length(
-    Seurat::VariableFeatures(
-      cd8_final_check,
-      assay = "RNA"
+    unique(
+      cd8_obj$Donor
     )
   )
 )
-message(
-  "Computational clusters: ",
-  dplyr::n_distinct(
-    cd8_final_check$seurat_clusters
-  )
-)
-message(
-  "Biological states: ",
-  dplyr::n_distinct(
-    cd8_final_check$CD8_State
-  )
-)
+
 message(
   "Clinical states: ",
-  dplyr::n_distinct(
-    cd8_final_check$Phase
+  paste(
+    sort(
+      unique(
+        cd8_obj$Phase
+      )
+    ),
+    collapse = ", "
   )
 )
-message(
-  "Donors: ",
-  dplyr::n_distinct(
-    cd8_final_check$Donor
-  )
-)
-message("PCA: PRESENT")
-message("UMAP: PRESENT")
-message("RNA_snn: PRESENT")
-message("Marker analysis: COMPLETE")
-message("Clinical composition: COMPLETE")
-message("DE analysis: RESERVED FOR PHASE 6")
-message("Pathway enrichment: RESERVED FOR PHASE 7")
-message("CellChat: RESERVED FOR PHASE 8")
-message("")
-message("FINAL RDS:")
-message(final_cd8_path)
-message("")
-message("============================================================")
-message("PHASE 4 IS OFFICIALLY WRAPPED. 🎉")
-message("============================================================")
 
+message(
+  "Computational clusters: ",
+  length(
+    unique(
+      cd8_obj$CD8_Cluster
+    )
+  )
+)
+
+message(
+  "CD8 clusters with final biological annotations: ",
+  length(
+    unique(
+      cd8_obj$CD8_Cluster
+    )
+  )
+)
+
+message(
+  "Unique biological annotation categories: ",
+  length(
+    unique(
+      cd8_obj$CD8_Biological_Annotation
+    )
+  )
+)
+
+message("")
+message("Final adjudicated RDS:")
+message(final_adjudicated_output)
+
+message("")
+message("Key Phase 4 outputs:")
+
+message(
+  file.path(
+    table_dir,
+    "phase4_cd8_final_adjudicated_annotations.csv"
+  )
+)
+
+message(
+  file.path(
+    table_dir,
+    "phase4_cd8_summary.txt"
+  )
+)
+
+message(
+  file.path(
+    figure_dir,
+    "phase4_cd8_final_biological_annotations.png"
+  )
+)
+
+message("")
+message("Phase 4 interpretation boundary:")
+
+message(
+  "The final annotations describe transcriptional heterogeneity within the",
+  " Phase-3 CD8-labelled compartment. Donor-aware clinical-state inference",
+  " remains outside Phase 4."
+)
+
+message("")
+message("============================================================")
+message("NEXT: PHASE 5 — MYELOID ANALYSIS")
+message("============================================================")
