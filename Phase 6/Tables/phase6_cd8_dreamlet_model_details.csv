@@ -1,0 +1,9 @@
+assay,n_retain,formula,formDropsTerms,n_genes,n_errors,error_initial
+CD8_Cluster_0,18,~Clinical_State - 1,FALSE,10315,0,FALSE
+CD8_Cluster_1,18,~Clinical_State - 1,FALSE,8945,0,FALSE
+CD8_Cluster_11,15,~Clinical_State - 1,FALSE,9788,0,FALSE
+CD8_Cluster_2,20,~Clinical_State - 1,FALSE,8853,0,FALSE
+CD8_Cluster_3,20,~Clinical_State - 1,FALSE,10774,0,FALSE
+CD8_Cluster_5,14,~Clinical_State - 1,FALSE,10168,0,FALSE
+CD8_Cluster_6,18,~Clinical_State - 1,FALSE,9619,0,FALSE
+CD8_Cluster_8,15,~Clinical_State - 1,FALSE,9866,0,FALSE
